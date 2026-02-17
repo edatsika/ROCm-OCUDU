@@ -84,4 +84,6 @@ get_fairly_distributed_pusch_td_resource_indices(subcarrier_spacing             
                                                  span<const uint8_t>                           dl_data_to_ul_ack,
                                                  const search_space_info*                      ss_info = nullptr);
 
+std::vector<unsigned> compute_dl_ul_k_map(const cell_configuration& cell_cfg);
+
 } // namespace ocudu

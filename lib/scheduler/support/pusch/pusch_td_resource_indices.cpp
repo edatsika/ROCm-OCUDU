@@ -22,6 +22,244 @@ static unsigned get_min_k1(span<const uint8_t> dl_data_to_ul_ack, const search_s
   return min_k1;
 }
 
+namespace {
+struct dl_to_ul_k_map {
+  dl_to_ul_k_map(unsigned sz_, const cell_configuration& cell_cfg_) : sz(sz_), cell_cfg(cell_cfg_)
+  {
+    dl_to_ul_map.assign(sz, std::vector<unsigned>(sz, 0));
+    min_k2 = std::numeric_limits<unsigned>::max();
+    for (const auto& td_res : cell_cfg.ul_cfg_common.init_ul_bwp.pusch_cfg_common.value().pusch_td_alloc_list) {
+      min_k2 = std::min(static_cast<unsigned>(td_res.k2), min_k2);
+    }
+  }
+
+  struct min_k {
+    // Row index corresponding to min_k.
+    unsigned value = 0;
+    // Row index corresponding to min_k.
+    unsigned dl_index = 0;
+  };
+
+  using min_k_vector = std::vector<min_k>;
+
+  void build_matrix()
+  {
+    for (unsigned row_idx = 0; row_idx != sz; ++row_idx) {
+      for (unsigned col_idx = 0; col_idx != sz; ++col_idx) {
+        dl_to_ul_map[row_idx][col_idx] = compute_k(row_idx, col_idx);
+      }
+    }
+  }
+
+  void compute_min_ks()
+  {
+    min_ks.assign(sz, min_k{});
+    for (unsigned col_idx = 0; col_idx != sz; ++col_idx) {
+      for (unsigned row_idx = 0; row_idx != sz; ++row_idx) {
+        if (dl_to_ul_map[row_idx][col_idx] == 0) {
+          continue;
+        }
+        if (min_ks[col_idx].value != 0) {
+          if (const bool update_row = dl_to_ul_map[row_idx][col_idx] < min_ks[col_idx].value; update_row) {
+            min_ks[col_idx] = {dl_to_ul_map[row_idx][col_idx], row_idx};
+          }
+        } else {
+          min_ks[col_idx].value    = dl_to_ul_map[row_idx][col_idx];
+          min_ks[col_idx].dl_index = row_idx;
+        }
+      }
+    }
+
+    fmt::print("\nMin\nV: ");
+    for (unsigned col_idx = 0; col_idx != sz; ++col_idx) {
+      fmt::print("{}\t", min_ks[col_idx].value);
+    }
+    fmt::print("\nI: ");
+    for (unsigned col_idx = 0; col_idx != sz; ++col_idx) {
+      fmt::print("{}\t", min_ks[col_idx].dl_index);
+    }
+    fmt::print("\n");
+  }
+
+  void compute_dl_hist()
+  {
+    dl_hist.assign(sz, {});
+    for (unsigned col_idx = 0; col_idx != sz; ++col_idx) {
+      if (min_ks[col_idx].value != 0) {
+        ocudu_assert(col_idx < min_ks.size() and min_ks[col_idx].dl_index < dl_hist.size(), "Wrong idx");
+        dl_hist[min_ks[col_idx].dl_index].emplace_back(col_idx);
+      }
+    }
+
+    fmt::print("\nHistogram\n");
+    for (unsigned row_idx = 0; row_idx != sz; ++row_idx) {
+      if (not dl_hist[row_idx].empty()) {
+        ocudu_assert(row_idx < dl_hist.size(), "Wrong idx");
+        for (auto hist : dl_hist[row_idx]) {
+          fmt::print("{}\t", hist);
+        }
+      } else {
+        fmt::print("x\t");
+      }
+      fmt::print("\n");
+    }
+    fmt::print("\n");
+  }
+
+  void remove_min_k(unsigned ul_sl)
+  {
+    ocudu_assert(ul_sl < min_ks.size() and min_ks[ul_sl].dl_index < dl_to_ul_map.size() and
+                     ul_sl < dl_to_ul_map[min_ks[ul_sl].dl_index].size(),
+                 "Wrong size");
+    dl_to_ul_map[min_ks[ul_sl].dl_index][ul_sl] = 0;
+  }
+
+  std::vector<unsigned> get_dl_k2_values() const
+  {
+    std::vector<unsigned> dl_k2_values{sz, 0U};
+    for (unsigned dl_sl_idx = 0; dl_sl_idx != sz; ++dl_sl_idx) {
+      if (dl_hist[dl_sl_idx].size() == 1) {
+        const unsigned ul_slot  = dl_hist[dl_sl_idx].front();
+        dl_k2_values[dl_sl_idx] = min_ks[ul_slot].value;
+      }
+    }
+    return dl_k2_values;
+  }
+  bool allocation_complete() const
+  {
+    bool complete = true;
+    for (unsigned dl_sl_idx = 0; dl_sl_idx != sz; ++dl_sl_idx) {
+      if (cell_cfg.is_dl_enabled(slot_point{cell_cfg.scs_common, dl_sl_idx}) and dl_hist[dl_sl_idx].size() > 1) {
+        complete = false;
+      }
+    }
+
+    for (unsigned ul_sl_idx = 0; ul_sl_idx != sz; ++ul_sl_idx) {
+      if (cell_cfg.is_ul_enabled(slot_point{cell_cfg.scs_common, ul_sl_idx}) and min_ks[ul_sl_idx].value == 0U) {
+        complete = false;
+      }
+    }
+
+    return complete;
+  }
+
+  unsigned compute_k(unsigned dl_sl, unsigned ul_sl) const
+  {
+    if (not cell_cfg.is_ul_enabled(slot_point{cell_cfg.scs_common, ul_sl}) or
+        not cell_cfg.is_dl_enabled(slot_point{cell_cfg.scs_common, dl_sl})) {
+      return 0U;
+    }
+    // const unsigned candidate_k = ul_sl > dl_sl and ul_sl - dl_sl >= dl_sl ? ul_sl - dl_sl : sz + ul_sl - dl_sl;
+    const unsigned candidate_k = ul_sl > dl_sl ? ul_sl - dl_sl : sz + ul_sl - dl_sl;
+    return candidate_k >= min_k2 ? candidate_k : candidate_k + sz;
+  }
+
+  std::vector<unsigned> get_final_dl_k_mapping() const
+  {
+    std::vector<unsigned> final_dl_k_mapping(sz, 0);
+    for (auto& min_elem : min_ks) {
+      // Only values different from 0 have valid k.
+      if (min_elem.value != 0U) {
+        final_dl_k_mapping[min_elem.dl_index] = min_elem.value;
+      }
+    }
+
+    fmt::print("\nIdx:\t");
+    for (unsigned sl_idx = 0; sl_idx != sz; ++sl_idx) {
+      fmt::print("{}\t", sl_idx);
+    }
+    fmt::print("\nk2: \t");
+    for (unsigned sl_idx = 0; sl_idx != sz; ++sl_idx) {
+      fmt::print("{}\t", final_dl_k_mapping[sl_idx]);
+    }
+    return final_dl_k_mapping;
+  }
+  void print_matrix()
+  {
+    fmt::print("\n");
+    for (unsigned row_idx = 0; row_idx != sz; ++row_idx) {
+      ocudu_assert(dl_to_ul_map.size() == sz, "Wrong size");
+      for (unsigned col_idx = 0; col_idx != sz; ++col_idx) {
+        ocudu_assert(dl_to_ul_map[row_idx].size() == sz, "Wrong size");
+        fmt::print("{}\t", dl_to_ul_map[row_idx][col_idx]);
+      }
+      fmt::print("\n");
+    }
+  }
+
+  using dl_to_ul = std::vector<unsigned>;
+  std::vector<dl_to_ul> dl_to_ul_map;
+
+  std::vector<std::vector<unsigned>> dl_hist;
+  std::vector<min_k>                 min_ks;
+
+  // Initialize this matrix.
+  const unsigned            sz;
+  const cell_configuration& cell_cfg;
+  unsigned                  min_k2;
+};
+} // anonymous namespace
+
+std::vector<unsigned> ocudu::compute_dl_ul_k_map(const cell_configuration& cell_cfg)
+{
+  const unsigned tdd_pattern_period_slots =
+      cell_cfg.tdd_cfg_common.value().pattern1.dl_ul_tx_period_nof_slots +
+      (cell_cfg.tdd_cfg_common.value().pattern2.has_value()
+           ? cell_cfg.tdd_cfg_common.value().pattern2.value().dl_ul_tx_period_nof_slots
+           : 0U);
+
+  dl_to_ul_k_map dl_to_ul_mtx = dl_to_ul_k_map(tdd_pattern_period_slots, cell_cfg);
+
+  // Build matrix.
+  dl_to_ul_mtx.build_matrix();
+
+  dl_to_ul_mtx.print_matrix();
+
+  // Compute the minimum k.
+  dl_to_ul_mtx.compute_min_ks();
+
+  // Compute the hist.
+  dl_to_ul_mtx.compute_dl_hist();
+
+  //
+  while (not dl_to_ul_mtx.allocation_complete()) {
+    // Find all DL slots such that the histogram is > 1;
+    std::vector<unsigned> dl_slots_non_1_hist;
+    for (unsigned sl_idx = 0, sz = dl_to_ul_mtx.dl_hist.size(); sl_idx != sz; ++sl_idx) {
+      if (dl_to_ul_mtx.dl_hist[sl_idx].size() > 1U) {
+        dl_slots_non_1_hist.emplace_back(sl_idx);
+      }
+    }
+
+    // Find the max among all min_k of the DL slots whose histogram > 1.
+    unsigned max_min_k         = 0;
+    unsigned dl_slot_max_min_k = 0;
+    for (unsigned dl_sl : dl_slots_non_1_hist) {
+      for (unsigned ul_sl : dl_to_ul_mtx.dl_hist[dl_sl]) {
+        if (dl_to_ul_mtx.min_ks[ul_sl].value > max_min_k) {
+          max_min_k         = dl_to_ul_mtx.min_ks[ul_sl].value;
+          dl_slot_max_min_k = dl_sl;
+        }
+      }
+    }
+
+    // Reprocess UL slots that has the DL slot in common with that of dl_slot_max_min_k.
+    for (unsigned ul_sl : dl_to_ul_mtx.dl_hist[dl_slot_max_min_k]) {
+      if (dl_to_ul_mtx.compute_k(dl_slot_max_min_k, ul_sl) != max_min_k) {
+        dl_to_ul_mtx.remove_min_k(dl_to_ul_mtx.dl_hist[dl_slot_max_min_k].front());
+      }
+    }
+
+    dl_to_ul_mtx.print_matrix();
+
+    // Recompute min ks and DL histogram
+    dl_to_ul_mtx.compute_min_ks();
+    dl_to_ul_mtx.compute_dl_hist();
+  }
+
+  return dl_to_ul_mtx.get_final_dl_k_mapping();
+}
+
 static span<const pusch_time_domain_resource_allocation>
 get_pusch_time_domain_resource_table(const pusch_config_common& pusch_cfg_common, const search_space_info* ss_info)
 {
