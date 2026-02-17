@@ -45,24 +45,38 @@ protected:
     // Generate the list to verify.
     ocudu_assert(cell_cfg->params.ul_cfg_common.init_ul_bwp.pusch_cfg_common.has_value(),
                  "PUSCH Config Common expected");
-    pusch_td_res_indxes_list_per_slot = get_fairly_distributed_pusch_td_resource_indices(
-        cell_cfg->scs_common(),
-        cell_cfg->params.tdd_cfg,
-        cell_cfg->params.ul_cfg_common.init_ul_bwp.pusch_cfg_common.value(),
-        cell_cfg->dl_data_to_ul_ack);
+    pusch_td_res_indxes_list_per_slot =
+        get_pusch_td_resource_indices_per_slot(cell_cfg->scs_common(),
+                                               cell_cfg->params.tdd_cfg,
+                                               cell_cfg->params.ul_cfg_common.init_ul_bwp.pusch_cfg_common.value(),
+                                               cell_cfg->dl_data_to_ul_ack);
 
-    const auto& td_list = cell_cfg->ul_cfg_common.init_ul_bwp.pusch_cfg_common.value().pusch_td_alloc_list;
-    fmt::print("\n List of TDD entries per DL slot\n");
-    for (unsigned dl_idx = 0, sz = pusch_td_res_indxes_list_per_slot.size(); dl_idx != sz; ++dl_idx) {
-      if (not has_active_tdd_dl_symbols(cell_cfg->tdd_cfg_common.value(), dl_idx)) {
-        continue;
+    fmt::print("\n List of TDD entries sent to UE \n");
+    for (unsigned n  = 0,
+                  sz = cell_cfg->params.ul_cfg_common.init_ul_bwp.pusch_cfg_common.value().pusch_td_alloc_list.size();
+         n != sz;
+         ++n) {
+      fmt::print("Vec idx={} k2={} symbols={}\n",
+                 n,
+                 cell_cfg->params.ul_cfg_common.init_ul_bwp.pusch_cfg_common.value().pusch_td_alloc_list[n].k2,
+                 cell_cfg->params.ul_cfg_common.init_ul_bwp.pusch_cfg_common.value().pusch_td_alloc_list[n].symbols);
+    }
+
+    const auto& td_list = cell_cfg->params.ul_cfg_common.init_ul_bwp.pusch_cfg_common.value().pusch_td_alloc_list;
+
+    if (cell_cfg->params.tdd_cfg.has_value()) {
+      fmt::print("\n List of TDD entries per DL slot\n");
+      for (unsigned dl_idx = 0, sz = pusch_td_res_indxes_list_per_slot.size(); dl_idx != sz; ++dl_idx) {
+        if (not has_active_tdd_dl_symbols(cell_cfg->params.tdd_cfg.value(), dl_idx)) {
+          continue;
+        }
+        const auto& dl_vec = pusch_td_res_indxes_list_per_slot[dl_idx];
+        fmt::print("DL idx={} k2_list=[ \t", dl_idx);
+        for (unsigned ul_td_idx : dl_vec) {
+          fmt::print("{}\t", td_list[ul_td_idx].k2);
+        }
+        fmt::print("]\n", dl_idx);
       }
-      const auto& dl_vec = pusch_td_res_indxes_list_per_slot[dl_idx];
-      fmt::print("DL idx={} k2_list=[ \t", dl_idx);
-      for (unsigned ul_td_idx : dl_vec) {
-        fmt::print("{}\t", td_list[ul_td_idx].k2);
-      }
-      fmt::print("]\n", dl_idx);
     }
 
     // Populate slot indexes.
@@ -95,6 +109,67 @@ protected:
   // List circularly indexed by slot with the list of applicable PUSCH Time Domain resource indexes per slot.
   std::vector<static_vector<unsigned, pusch_constants::MAX_NOF_PUSCH_TD_RES_ALLOCS>> pusch_td_res_indxes_list_per_slot;
 };
+
+TEST_P(pusch_td_resource_indices_test, in_dl_heavy_tdd_maps_order_of_mapping_is_met)
+{
+  // Fetch the relevant PUSCH time domain resource list.
+  span<const pusch_time_domain_resource_allocation> pusch_time_domain_list =
+      get_c_rnti_pusch_time_domain_list(true, to_coreset_id(0), cell_cfg->params.ul_cfg_common.init_ul_bwp, nullptr);
+
+  if (not GetParam().tdd_cfg.has_value()) {
+    GTEST_SKIP();
+  }
+
+  const unsigned nof_dl_slots      = nof_dl_slots_per_tdd_period(cell_cfg->params.tdd_cfg.value());
+  const unsigned nof_full_ul_slots = nof_full_ul_slots_per_tdd_period(cell_cfg->params.tdd_cfg.value());
+  const unsigned nof_slots         = nof_slots_per_tdd_period(cell_cfg->params.tdd_cfg.value());
+
+  // Return the UL index given DL its k2.
+  // NOTE: we don't apply any mod, as the objective of the test is only to make sure that
+  // DL_idx_n + k2(DL_idx_n) < DL_idx_m + k2(DL_idx_m) for any DL_idx_m < DL_idx_m.
+  auto get_ul_slot_index = [&pusch_time_domain_list, this](unsigned dl_sl_idx) {
+    return dl_sl_idx + pusch_time_domain_list[pusch_td_res_indxes_list_per_slot[dl_sl_idx].front()].k2;
+  };
+
+  if (nof_dl_slots < nof_full_ul_slots) {
+    GTEST_SKIP();
+  }
+
+  for (unsigned dl_idx_n = 0; dl_idx_n != nof_slots - 1; ++dl_idx_n) {
+    const auto& dl_idx_n_list = pusch_td_res_indxes_list_per_slot[dl_idx_n];
+    ASSERT_LE(dl_idx_n_list.size(), 1);
+    if (dl_idx_n_list.empty()) {
+      continue;
+    }
+    const unsigned ul_idx_n = get_ul_slot_index(dl_idx_n);
+    for (unsigned dl_idx_k = dl_idx_n + 1; dl_idx_k != nof_slots; ++dl_idx_k) {
+      const auto& dl_idx_k_list = pusch_td_res_indxes_list_per_slot[dl_idx_k];
+      ASSERT_LE(dl_idx_k_list.size(), 1);
+      if (dl_idx_k_list.empty()) {
+        continue;
+      }
+      unsigned ul_idx_k = get_ul_slot_index(dl_idx_k);
+      fmt::print("dl_n={} k2={} ul_idx_n={}, dl_n={} k2={} ul_idx_k={}\n",
+                 dl_idx_n,
+                 pusch_time_domain_list[pusch_td_res_indxes_list_per_slot[dl_idx_n].front()].k2,
+                 ul_idx_n,
+                 dl_idx_k,
+                 pusch_time_domain_list[pusch_td_res_indxes_list_per_slot[dl_idx_k].front()].k2,
+                 ul_idx_k);
+      if (ul_idx_n >= nof_slots) {
+        ASSERT_GT(ul_idx_k, nof_slots);
+        ASSERT_LT(ul_idx_n, ul_idx_k);
+      } else {
+        if (ul_idx_k >= nof_slots) {
+          ASSERT_LT(ul_idx_k % nof_slots, ul_idx_n);
+        } else {
+          ASSERT_LT(ul_idx_n, ul_idx_k);
+        }
+      }
+    }
+  }
+  fmt::print("Done\n");
+}
 
 TEST_P(pusch_td_resource_indices_test, all_ul_slots_have_one_pdcch_slot_to_schedule_pusch)
 {
@@ -149,11 +224,6 @@ TEST_P(pusch_td_resource_indices_test, pusch_td_resources_are_fairly_distributed
   }
 }
 
-TEST_P(pusch_td_resource_indices_test, tmp)
-{
-  compute_dl_ul_k_map(*cell_cfg);
-}
-
 /// Formatter for test params.
 void PrintTo(const test_params& value, ::std::ostream* os)
 {
@@ -166,39 +236,52 @@ void PrintTo(const test_params& value, ::std::ostream* os)
 } // namespace
 
 INSTANTIATE_TEST_SUITE_P(
+    pusch_td_resource_indices_test1ASD,
+    pusch_td_resource_indices_test,
+    testing::Values(
+        // clang-format off
+        // min_k, {ref_scs, pattern1={slot_period, DL_slots, DL_symbols, UL_slots, UL_symbols}, pattern2={...}}
+
+        test_params{5, tdd_ul_dl_config_common{subcarrier_spacing::kHz30,{4, 1, 8, 2, 4}, tdd_ul_dl_pattern{6, 3, 8, 2, 4}} } // DDDSUUDSUU
+
+        // clang-format on
+        ));
+
+INSTANTIATE_TEST_SUITE_P(
     pusch_td_resource_indices_test,
     pusch_td_resource_indices_test,
     testing::Values(
         // clang-format off
         // min_k, {ref_scs, pattern1={slot_period, DL_slots, DL_symbols, UL_slots, UL_symbols}, pattern2={...}}
-        // test_params{4, tdd_ul_dl_config_common{subcarrier_spacing::kHz30, {6, 1, 10, 4, 0}, tdd_ul_dl_pattern{4, 1,
-        //  10, 2, 0}}}, test_params{2, tdd_ul_dl_config_common{subcarrier_spacing::kHz30, {6, 2, 10, 3, 0}}}
-
-        test_params{2, tdd_ul_dl_config_common{subcarrier_spacing::kHz30, {10,  6, 10, 3, 0}, }}
-
-        // clang-format on
+        test_params{2,  {}}, // FDD
+        test_params{4,  {}}, // FDD
+        test_params{4,  tdd_ul_dl_config_common{subcarrier_spacing::kHz30, {10, 6, 5, 3, 4}}}, // DDDDDDSUUU
+        test_params{3,  tdd_ul_dl_config_common{subcarrier_spacing::kHz30, {10, 6, 5, 3, 4}}}, // DDDDDDSUUU
+        test_params{2,  tdd_ul_dl_config_common{subcarrier_spacing::kHz30, {10, 6, 5, 3, 4}}}, // DDDDDDSUUU
+        test_params{4,  tdd_ul_dl_config_common{subcarrier_spacing::kHz30, {10, 7, 5, 2, 4}}}, // DDDDDDDSUU
+        test_params{3,  tdd_ul_dl_config_common{subcarrier_spacing::kHz30, {10, 7, 5, 2, 4}}}, // DDDDDDDSUU
+        test_params{2,  tdd_ul_dl_config_common{subcarrier_spacing::kHz30, {10, 7, 5, 2, 4}}}, // DDDDDDDSUU
+        test_params{2,  tdd_ul_dl_config_common{subcarrier_spacing::kHz30, {10, 8, 5, 1, 4}}}, // DDDDDDDDSU
+        test_params{4, tdd_ul_dl_config_common{subcarrier_spacing::kHz30, {6,  3, 5, 2, 0}, tdd_ul_dl_pattern{4, 4, 0, 0, 0}}}, test_params{2,  tdd_ul_dl_config_common{subcarrier_spacing::kHz30, {4,  2, 9, 1, 0}}},  // DDSU
+        test_params{3, tdd_ul_dl_config_common{subcarrier_spacing::kHz30, {6,  3, 5, 2, 0}, tdd_ul_dl_pattern{4, 4, 0, 0, 0}}}, test_params{2,  tdd_ul_dl_config_common{subcarrier_spacing::kHz30, {4,  2, 9, 1, 0}}},  // DDSU
+        test_params{2, tdd_ul_dl_config_common{subcarrier_spacing::kHz30, {6,  3, 5, 2, 0}, tdd_ul_dl_pattern{4, 4, 0, 0, 0}}}, test_params{2,  tdd_ul_dl_config_common{subcarrier_spacing::kHz30, {4,  2, 9, 1, 0}}},  // DDSU
+        test_params{5, tdd_ul_dl_config_common{subcarrier_spacing::kHz30, {10, 4, 5, 5, 0}}}, // DDDDSUUUUU
+        test_params{4, tdd_ul_dl_config_common{subcarrier_spacing::kHz30, {10, 4, 5, 5, 0}}}, // DDDDSUUUUU
+        test_params{3, tdd_ul_dl_config_common{subcarrier_spacing::kHz30, {10, 4, 5, 5, 0}}}, // DDDDSUUUUU
+        test_params{5, tdd_ul_dl_config_common{subcarrier_spacing::kHz30,{6, 3, 8, 2, 4}, tdd_ul_dl_pattern{4, 1, 8, 2, 4}} }, // DDDSUUDSUU
+        test_params{4, tdd_ul_dl_config_common{subcarrier_spacing::kHz30,{6, 3, 8, 2, 4}, tdd_ul_dl_pattern{4, 1, 8, 2, 4}} }, // DDDSUUDSUU
+        test_params{3, tdd_ul_dl_config_common{subcarrier_spacing::kHz30,{6, 3, 8, 2, 4}, tdd_ul_dl_pattern{4, 1, 8, 2, 4}} }, // DDDSUUDSUU
+        test_params{2, tdd_ul_dl_config_common{subcarrier_spacing::kHz30,{6, 3, 8, 2, 4}, tdd_ul_dl_pattern{4, 1, 8, 2, 4}} }, // DDDSUUDSUU
+        test_params{5, tdd_ul_dl_config_common{subcarrier_spacing::kHz30,{4, 1, 8, 2, 4}, tdd_ul_dl_pattern{6, 3, 8, 2, 4}} }, // DSUUDDDSUU
+        test_params{4, tdd_ul_dl_config_common{subcarrier_spacing::kHz30,{4, 1, 8, 2, 4}, tdd_ul_dl_pattern{6, 3, 8, 2, 4}} }, // DSUUDDDSUU
+        test_params{3, tdd_ul_dl_config_common{subcarrier_spacing::kHz30,{4, 1, 8, 2, 4}, tdd_ul_dl_pattern{6, 3, 8, 2, 4}} }, // DSUUDDDSUU
+        test_params{2, tdd_ul_dl_config_common{subcarrier_spacing::kHz30,{4, 1, 8, 2, 4}, tdd_ul_dl_pattern{6, 3, 8, 2, 4}} }, // DSUUDDDSUU
+        // UL heavy
+        test_params{2, tdd_ul_dl_config_common{subcarrier_spacing::kHz30, {10, 3, 5, 6, 0}}},
+        test_params{2, tdd_ul_dl_config_common{subcarrier_spacing::kHz30, {5, 1, 10, 3, 0}, tdd_ul_dl_pattern{5, 1,
+        10, 3, 0}}}, test_params{2, tdd_ul_dl_config_common{subcarrier_spacing::kHz30, {6, 2, 10, 3, 0},
+        tdd_ul_dl_pattern{4, 1, 0, 3, 0}}}, test_params{2, tdd_ul_dl_config_common{subcarrier_spacing::kHz30, {4, 1,
+        10, 2, 0}, tdd_ul_dl_pattern{6, 1, 10, 4, 0}}}, test_params{2,
+        tdd_ul_dl_config_common{subcarrier_spacing::kHz30, {10, 2, 10, 7, 0}}}, test_params{2,
+        tdd_ul_dl_config_common{subcarrier_spacing::kHz30, {5,  1, 10, 3, 0}}} // clang-format on
         ));
-
-// INSTANTIATE_TEST_SUITE_P(
-//     pusch_td_resource_indices_test,
-//     pusch_td_resource_indices_test,
-//     testing::Values(
-//         // clang-format off
-//         // min_k, {ref_scs, pattern1={slot_period, DL_slots, DL_symbols, UL_slots, UL_symbols}, pattern2={...}}
-//         test_params{2,  {}}, // FDD
-//         test_params{4,  {}}, // FDD
-//         test_params{4,  tdd_ul_dl_config_common{subcarrier_spacing::kHz30, {10, 6, 5, 3, 4}}}, // DDDDDDSUUU
-//         test_params{2,  tdd_ul_dl_config_common{subcarrier_spacing::kHz30, {10, 7, 5, 2, 4}}}, // DDDDDDDSUU
-//         test_params{2,  tdd_ul_dl_config_common{subcarrier_spacing::kHz30, {10, 8, 5, 1, 4}}}, // DDDDDDDDSU
-//         test_params{2, tdd_ul_dl_config_common{subcarrier_spacing::kHz30, {6,  3, 5, 2, 0}, tdd_ul_dl_pattern{4, 4,
-//         0, 0, 0}}}, test_params{2,  tdd_ul_dl_config_common{subcarrier_spacing::kHz30, {4,  2, 9, 1, 0}}},  // DDSU
-//         test_params{5, tdd_ul_dl_config_common{subcarrier_spacing::kHz30, {10, 4, 5, 5, 0}}}, // DDDDSUUUUU
-//         // UL heavy
-//         test_params{2, tdd_ul_dl_config_common{subcarrier_spacing::kHz30, {10, 3, 5, 6, 0}}},
-//         test_params{2, tdd_ul_dl_config_common{subcarrier_spacing::kHz30, {5, 1, 10, 3, 0}, tdd_ul_dl_pattern{5, 1,
-//         10, 3, 0}}}, test_params{2, tdd_ul_dl_config_common{subcarrier_spacing::kHz30, {6, 2, 10, 3, 0},
-//         tdd_ul_dl_pattern{4, 1, 0, 3, 0}}}, test_params{2, tdd_ul_dl_config_common{subcarrier_spacing::kHz30, {4, 1,
-//         10, 2, 0}, tdd_ul_dl_pattern{6, 1, 10, 4, 0}}}, test_params{2,
-//         tdd_ul_dl_config_common{subcarrier_spacing::kHz30, {10, 2, 10, 7, 0}}}, test_params{2,
-//         tdd_ul_dl_config_common{subcarrier_spacing::kHz30, {5,  1, 10, 3, 0}}} // clang-format on
-//         ));
