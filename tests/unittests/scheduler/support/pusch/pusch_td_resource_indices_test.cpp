@@ -242,7 +242,7 @@ INSTANTIATE_TEST_SUITE_P(
         // clang-format off
         // min_k, {ref_scs, pattern1={slot_period, DL_slots, DL_symbols, UL_slots, UL_symbols}, pattern2={...}}
 
-        test_params{5, tdd_ul_dl_config_common{subcarrier_spacing::kHz30,{4, 1, 8, 2, 4}, tdd_ul_dl_pattern{6, 3, 8, 2, 4}} } // DDDSUUDSUU
+        test_params{4, tdd_ul_dl_config_common{subcarrier_spacing::kHz30,{6, 3, 8, 2, 4}, tdd_ul_dl_pattern{4, 1, 8, 2, 4}} } // DDDSUUDSUU
 
         // clang-format on
         ));

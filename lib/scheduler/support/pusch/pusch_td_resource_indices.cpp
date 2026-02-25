@@ -66,8 +66,8 @@ public:
       unsigned dl_slot_max_min_k = 0;
       for (const unsigned dl_sl : dl_slots_non_1_hist) {
         for (const unsigned ul_sl : dl_hist[dl_sl]) {
-          if (min_ks[ul_sl].value > max_min_k) {
-            max_min_k         = min_ks[ul_sl].value;
+          if (min_ks[ul_sl] > max_min_k) {
+            max_min_k         = min_ks[ul_sl];
             dl_slot_max_min_k = dl_sl;
           }
         }
@@ -89,15 +89,22 @@ public:
     std::vector<static_vector<unsigned, pusch_constants::MAX_NOF_PUSCH_TD_RES_ALLOCS>>
         pusch_td_resource_indices_per_slot(sz);
 
-    for (auto& min_elem : min_ks) {
+    for (unsigned ul_idx = 0; ul_idx != sz; ++ul_idx) {
+      const unsigned min_elem = min_ks[ul_idx];
       // Only values different from 0 have valid k.
-      if (min_elem.value != 0U) {
+      if (min_elem != 0U) {
         const auto& td_res_idx_it = std::find_if(
             pusch_td_alloc_list.begin(),
             pusch_td_alloc_list.end(),
-            [k2 = min_elem.value](const pusch_time_domain_resource_allocation& td_res) { return td_res.k2 == k2; });
+            [min_elem](const pusch_time_domain_resource_allocation& td_res) { return td_res.k2 == min_elem; });
         ocudu_assert(td_res_idx_it != pusch_td_alloc_list.end(), "");
-        pusch_td_resource_indices_per_slot[min_elem.dl_index] = {
+        if (not get_dl_sl_idx_from_min_k_vec(ul_idx).has_value()) {
+          fmt::print("");
+        }
+        ocudu_assert(get_dl_sl_idx_from_min_k_vec(ul_idx).has_value() and
+                         get_dl_sl_idx_from_min_k_vec(ul_idx).value() < pusch_td_resource_indices_per_slot.size(),
+                     "dl_index obtained from k2 exceeds vector size");
+        pusch_td_resource_indices_per_slot[get_dl_sl_idx_from_min_k_vec(ul_idx).value()] = {
             static_cast<unsigned>(std::distance(pusch_td_alloc_list.begin(), td_res_idx_it))};
       }
     }
@@ -131,30 +138,33 @@ private:
 
   void compute_min_ks()
   {
-    min_ks.assign(sz, min_k{});
+    min_ks.assign(sz, 0);
     for (unsigned col_idx = 0; col_idx != sz; ++col_idx) {
       for (unsigned row_idx = 0; row_idx != sz; ++row_idx) {
         if (dl_to_ul_map[row_idx][col_idx] == 0) {
           continue;
         }
-        if (min_ks[col_idx].value != 0) {
-          if (const bool update_row = dl_to_ul_map[row_idx][col_idx] < min_ks[col_idx].value; update_row) {
-            min_ks[col_idx] = {dl_to_ul_map[row_idx][col_idx], row_idx};
+        if (min_ks[col_idx] != 0) {
+          if (const bool update_row = dl_to_ul_map[row_idx][col_idx] < min_ks[col_idx]; update_row) {
+            min_ks[col_idx] = dl_to_ul_map[row_idx][col_idx];
           }
         } else {
-          min_ks[col_idx].value    = dl_to_ul_map[row_idx][col_idx];
-          min_ks[col_idx].dl_index = row_idx;
+          min_ks[col_idx] = dl_to_ul_map[row_idx][col_idx];
         }
       }
     }
 
     fmt::print("\nMin\nV: ");
     for (unsigned col_idx = 0; col_idx != sz; ++col_idx) {
-      fmt::print("{}\t", min_ks[col_idx].value);
+      fmt::print("{}\t", min_ks[col_idx]);
     }
     fmt::print("\nI: ");
     for (unsigned col_idx = 0; col_idx != sz; ++col_idx) {
-      fmt::print("{}\t", min_ks[col_idx].dl_index);
+      if (get_dl_sl_idx_from_min_k_vec(col_idx).has_value()) {
+        fmt::print("{}\t", get_dl_sl_idx_from_min_k_vec(col_idx).value());
+      } else {
+        fmt::print("na\t");
+      }
     }
     fmt::print("\n");
   }
@@ -163,9 +173,11 @@ private:
   {
     dl_hist.assign(sz, {});
     for (unsigned col_idx = 0; col_idx != sz; ++col_idx) {
-      if (min_ks[col_idx].value != 0) {
-        ocudu_assert(col_idx < min_ks.size() and min_ks[col_idx].dl_index < dl_hist.size(), "Wrong idx");
-        dl_hist[min_ks[col_idx].dl_index].emplace_back(col_idx);
+      if (min_ks[col_idx] != 0) {
+        ocudu_assert(col_idx < min_ks.size() and get_dl_sl_idx_from_min_k_vec(col_idx).has_value() and
+                         get_dl_sl_idx_from_min_k_vec(col_idx).value() < dl_hist.size(),
+                     "Wrong idx");
+        dl_hist[get_dl_sl_idx_from_min_k_vec(col_idx).value()].emplace_back(col_idx);
       }
     }
 
@@ -187,10 +199,11 @@ private:
   // Remove the current min_k from the DL-to-UL matrix of k2 values for a specific UL slot.
   void remove_min_k(unsigned ul_sl)
   {
-    ocudu_assert(ul_sl < min_ks.size() and min_ks[ul_sl].dl_index < dl_to_ul_map.size() and
-                     ul_sl < dl_to_ul_map[min_ks[ul_sl].dl_index].size(),
+    ocudu_assert(ul_sl < min_ks.size() and get_dl_sl_idx_from_min_k_vec(ul_sl) < dl_to_ul_map.size() and
+                     get_dl_sl_idx_from_min_k_vec(ul_sl).has_value() and
+                     ul_sl < dl_to_ul_map[get_dl_sl_idx_from_min_k_vec(ul_sl).value()].size(),
                  "Wrong size");
-    dl_to_ul_map[min_ks[ul_sl].dl_index][ul_sl] = 0;
+    dl_to_ul_map[get_dl_sl_idx_from_min_k_vec(ul_sl).value()][ul_sl] = 0;
   }
 
   bool allocation_complete() const
@@ -203,7 +216,7 @@ private:
     }
 
     for (unsigned ul_sl_idx = 0; ul_sl_idx != sz; ++ul_sl_idx) {
-      if (is_tdd_full_ul_slot(tdd_cfg, ul_sl_idx) and min_ks[ul_sl_idx].value == 0U) {
+      if (is_tdd_full_ul_slot(tdd_cfg, ul_sl_idx) and min_ks[ul_sl_idx] == 0U) {
         complete = false;
       }
     }
@@ -224,15 +237,18 @@ private:
   // k2 exits; contains 0 otherwise.
   std::vector<std::vector<unsigned>> dl_to_ul_map;
 
-  struct min_k {
-    // min_k.
-    unsigned value = 0;
-    // Row index (i.e., DL index) corresponding to min_k.
-    unsigned dl_index = 0;
-  };
   // Vector of min_ks; min_ks(ul_idx) contains the min_k2 value that can be used to reach the UL slot "ul_idx"; and the
   // corresponding "dl_idx" that maps to "ul_idx" with min_ks(ul_idx).
-  std::vector<min_k> min_ks;
+  std::vector<unsigned> min_ks;
+
+  std::optional<unsigned> get_dl_sl_idx_from_min_k_vec(unsigned ul_sl_idx) const
+  {
+    ocudu_assert(ul_sl_idx < sz, "ul_sl_idx exceeds min_ks vector size");
+    if (min_ks[ul_sl_idx] == 0) {
+      return std::nullopt;
+    }
+    return ul_sl_idx >= min_ks[ul_sl_idx] ? ul_sl_idx - min_ks[ul_sl_idx] : sz + ul_sl_idx - min_ks[ul_sl_idx];
+  }
 
   // Vector of UL indices "reachable" from DL slot idx; dl_hist[dl_idx] contains the list of UL slots that can be
   // reached from dl_idx with the min_k2 saved in \ref dl_idx.
