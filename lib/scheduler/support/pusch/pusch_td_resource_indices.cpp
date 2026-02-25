@@ -50,18 +50,21 @@ public:
     compute_dl_hist();
 
     while (not allocation_complete()) {
-      // Find all DL slots such that the histogram is > 1;
-      std::vector<unsigned> dl_slots_non_1_hist;
-      for (unsigned sl_idx = 0; sl_idx != sz; ++sl_idx) {
-        if (dl_hist[sl_idx].size() > 1U) {
-          dl_slots_non_1_hist.emplace_back(sl_idx);
-        }
-      }
+      // // Find all DL slots such that the histogram is > 1;
+      // std::vector<unsigned> dl_slots_non_1_hist;
+      // for (unsigned sl_idx = 0; sl_idx != sz; ++sl_idx) {
+      //   if (dl_hist[sl_idx].size() > 1U) {
+      //     dl_slots_non_1_hist.emplace_back(sl_idx);
+      //   }
+      // }
 
-      // Find the max among all min_k of the DL slots whose histogram > 1.
+      // For all DL slots such that the histogram is > 1, the max among the corresponding min_k.
       unsigned max_min_k         = 0;
       unsigned dl_slot_max_min_k = 0;
-      for (const unsigned dl_sl : dl_slots_non_1_hist) {
+      for (unsigned dl_sl = 0; dl_sl != sz; ++dl_sl) {
+        if (dl_hist[dl_sl].size() <= 1U) {
+          continue;
+        }
         for (const unsigned ul_sl : dl_hist[dl_sl]) {
           if (min_ks[ul_sl] > max_min_k) {
             max_min_k         = min_ks[ul_sl];
@@ -70,9 +73,12 @@ public:
         }
       }
 
+      // Remove max_min_k from
       // Reprocess UL slots that has the DL slot in common with that of dl_slot_max_min_k.
       for (const unsigned ul_sl : dl_hist[dl_slot_max_min_k]) {
+        fmt::print("dl_slot_max_min_k={}, ul_sl={}\n", dl_slot_max_min_k, ul_sl);
         if (compute_k(dl_slot_max_min_k, ul_sl) != max_min_k) {
+          fmt::print("Removing min_k for ul={}\n", dl_hist[dl_slot_max_min_k].front());
           remove_min_k(dl_hist[dl_slot_max_min_k].front());
         }
       }
@@ -498,21 +504,7 @@ ocudu::get_pusch_td_resource_indices_per_slot(subcarrier_spacing                
   if (nof_dl_slots >= nof_full_ul_slots) {
     dl_heavy_td_resources_idx_builder dl_hv_builder(
         nof_slots, tdd_cfg_common.value(), pusch_cfg_common.pusch_td_alloc_list);
-    const auto asd = dl_hv_builder.compute_td_res_indices_per_slot();
-
-    fmt::print("\n List of TDD entries per DL slot\n");
-    for (unsigned dl_idx = 0, sz = asd.size(); dl_idx != sz; ++dl_idx) {
-      if (not has_active_tdd_dl_symbols(tdd_cfg_common.value(), dl_idx)) {
-        continue;
-      }
-      const auto& dl_vec = asd[dl_idx];
-      fmt::print("DL idx={} k2_list=[ \t", dl_idx);
-      for (unsigned ul_td_idx : dl_vec) {
-        fmt::print("{}\t", pusch_cfg_common.pusch_td_alloc_list[ul_td_idx].k2);
-      }
-      fmt::print("]\n", dl_idx);
-    }
-    return asd;
+    return dl_hv_builder.compute_td_res_indices_per_slot();
   }
 
   // UL-heavy case

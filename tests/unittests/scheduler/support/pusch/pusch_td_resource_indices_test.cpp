@@ -257,6 +257,7 @@ INSTANTIATE_TEST_SUITE_P(
         test_params{4, tdd_ul_dl_config_common{subcarrier_spacing::kHz30,{4, 1, 8, 2, 4}, tdd_ul_dl_pattern{6, 3, 8, 2, 4}} }, // DSUUDDDSUU
         test_params{3, tdd_ul_dl_config_common{subcarrier_spacing::kHz30,{4, 1, 8, 2, 4}, tdd_ul_dl_pattern{6, 3, 8, 2, 4}} }, // DSUUDDDSUU
         test_params{2, tdd_ul_dl_config_common{subcarrier_spacing::kHz30,{4, 1, 8, 2, 4}, tdd_ul_dl_pattern{6, 3, 8, 2, 4}} }, // DSUUDDDSUU
+        test_params{4, tdd_ul_dl_config_common{subcarrier_spacing::kHz30,{15, 13, 8, 1, 4}, tdd_ul_dl_pattern{5, 1, 0, 3, 4}} }, // 13DSUDSUUU
         // UL heavy
         test_params{2, tdd_ul_dl_config_common{subcarrier_spacing::kHz30, {10, 3, 5, 6, 0}}},
         test_params{2, tdd_ul_dl_config_common{subcarrier_spacing::kHz30, {5, 1, 10, 3, 0}, tdd_ul_dl_pattern{5, 1,
