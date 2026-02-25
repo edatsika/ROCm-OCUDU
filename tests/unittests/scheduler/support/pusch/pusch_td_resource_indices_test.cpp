@@ -110,7 +110,8 @@ protected:
   std::vector<static_vector<unsigned, pusch_constants::MAX_NOF_PUSCH_TD_RES_ALLOCS>> pusch_td_res_indxes_list_per_slot;
 };
 
-TEST_P(pusch_td_resource_indices_test, in_dl_heavy_tdd_maps_order_of_mapping_is_met)
+// This test is only for DL-heavy TDD pattern.
+TEST_P(pusch_td_resource_indices_test, in_dl_heavy_tdd_dl_to_ul_index_ordering_is_verified)
 {
   // Fetch the relevant PUSCH time domain resource list.
   span<const pusch_time_domain_resource_allocation> pusch_time_domain_list =
@@ -124,9 +125,8 @@ TEST_P(pusch_td_resource_indices_test, in_dl_heavy_tdd_maps_order_of_mapping_is_
   const unsigned nof_full_ul_slots = nof_full_ul_slots_per_tdd_period(cell_cfg->params.tdd_cfg.value());
   const unsigned nof_slots         = nof_slots_per_tdd_period(cell_cfg->params.tdd_cfg.value());
 
-  // Return the UL index given DL its k2.
-  // NOTE: we don't apply any mod, as the objective of the test is only to make sure that
-  // DL_idx_n + k2(DL_idx_n) < DL_idx_m + k2(DL_idx_m) for any DL_idx_m < DL_idx_m.
+  // Return the UL index given DL index and its corresponding k2.
+  // NOTE: we don't apply any mod operation on purpose, as the mod is applied to by function caller.
   auto get_ul_slot_index = [&pusch_time_domain_list, this](unsigned dl_sl_idx) {
     return dl_sl_idx + pusch_time_domain_list[pusch_td_res_indxes_list_per_slot[dl_sl_idx].front()].k2;
   };
@@ -148,27 +148,20 @@ TEST_P(pusch_td_resource_indices_test, in_dl_heavy_tdd_maps_order_of_mapping_is_
       if (dl_idx_k_list.empty()) {
         continue;
       }
-      unsigned ul_idx_k = get_ul_slot_index(dl_idx_k);
-      fmt::print("dl_n={} k2={} ul_idx_n={}, dl_n={} k2={} ul_idx_k={}\n",
-                 dl_idx_n,
-                 pusch_time_domain_list[pusch_td_res_indxes_list_per_slot[dl_idx_n].front()].k2,
-                 ul_idx_n,
-                 dl_idx_k,
-                 pusch_time_domain_list[pusch_td_res_indxes_list_per_slot[dl_idx_k].front()].k2,
-                 ul_idx_k);
+      const unsigned ul_idx_k = get_ul_slot_index(dl_idx_k);
+      // The smaller UL index >= TDD period.
       if (ul_idx_n >= nof_slots) {
         ASSERT_GT(ul_idx_k, nof_slots);
         ASSERT_LT(ul_idx_n, ul_idx_k);
+      }
+      // In the next cases, UL index < TDD period.
+      else if (ul_idx_k >= nof_slots) {
+        ASSERT_LT(ul_idx_k % nof_slots, ul_idx_n);
       } else {
-        if (ul_idx_k >= nof_slots) {
-          ASSERT_LT(ul_idx_k % nof_slots, ul_idx_n);
-        } else {
-          ASSERT_LT(ul_idx_n, ul_idx_k);
-        }
+        ASSERT_LT(ul_idx_n, ul_idx_k);
       }
     }
   }
-  fmt::print("Done\n");
 }
 
 TEST_P(pusch_td_resource_indices_test, all_ul_slots_have_one_pdcch_slot_to_schedule_pusch)
@@ -234,18 +227,6 @@ void PrintTo(const test_params& value, ::std::ostream* os)
 }
 
 } // namespace
-
-INSTANTIATE_TEST_SUITE_P(
-    pusch_td_resource_indices_test1ASD,
-    pusch_td_resource_indices_test,
-    testing::Values(
-        // clang-format off
-        // min_k, {ref_scs, pattern1={slot_period, DL_slots, DL_symbols, UL_slots, UL_symbols}, pattern2={...}}
-
-        test_params{4, tdd_ul_dl_config_common{subcarrier_spacing::kHz30,{6, 3, 8, 2, 4}, tdd_ul_dl_pattern{4, 1, 8, 2, 4}} } // DDDSUUDSUU
-
-        // clang-format on
-        ));
 
 INSTANTIATE_TEST_SUITE_P(
     pusch_td_resource_indices_test,

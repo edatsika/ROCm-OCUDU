@@ -43,15 +43,12 @@ public:
     // Build matrix.
     build_matrix();
 
-    print_matrix();
-
     // Compute the minimum k.
     compute_min_ks();
 
     // Compute the hist.
     compute_dl_hist();
 
-    //
     while (not allocation_complete()) {
       // Find all DL slots such that the histogram is > 1;
       std::vector<unsigned> dl_slots_non_1_hist;
@@ -74,12 +71,11 @@ public:
       }
 
       // Reprocess UL slots that has the DL slot in common with that of dl_slot_max_min_k.
-      for (unsigned ul_sl : dl_hist[dl_slot_max_min_k]) {
+      for (const unsigned ul_sl : dl_hist[dl_slot_max_min_k]) {
         if (compute_k(dl_slot_max_min_k, ul_sl) != max_min_k) {
           remove_min_k(dl_hist[dl_slot_max_min_k].front());
         }
       }
-      print_matrix();
 
       // Recompute min ks and DL histogram
       compute_min_ks();
@@ -97,10 +93,7 @@ public:
             pusch_td_alloc_list.begin(),
             pusch_td_alloc_list.end(),
             [min_elem](const pusch_time_domain_resource_allocation& td_res) { return td_res.k2 == min_elem; });
-        ocudu_assert(td_res_idx_it != pusch_td_alloc_list.end(), "");
-        if (not get_dl_sl_idx_from_min_k_vec(ul_idx).has_value()) {
-          fmt::print("");
-        }
+        ocudu_assert(td_res_idx_it != pusch_td_alloc_list.end(), "Expected TD resource index not found");
         ocudu_assert(get_dl_sl_idx_from_min_k_vec(ul_idx).has_value() and
                          get_dl_sl_idx_from_min_k_vec(ul_idx).value() < pusch_td_resource_indices_per_slot.size(),
                      "dl_index obtained from k2 exceeds vector size");
@@ -123,19 +116,6 @@ private:
     }
   }
 
-  void print_matrix()
-  {
-    fmt::print("\n");
-    for (unsigned row_idx = 0; row_idx != sz; ++row_idx) {
-      ocudu_assert(dl_to_ul_map.size() == sz, "Wrong size");
-      for (unsigned col_idx = 0; col_idx != sz; ++col_idx) {
-        ocudu_assert(dl_to_ul_map[row_idx].size() == sz, "Wrong size");
-        fmt::print("{}\t", dl_to_ul_map[row_idx][col_idx]);
-      }
-      fmt::print("\n");
-    }
-  }
-
   void compute_min_ks()
   {
     min_ks.assign(sz, 0);
@@ -153,20 +133,6 @@ private:
         }
       }
     }
-
-    fmt::print("\nMin\nV: ");
-    for (unsigned col_idx = 0; col_idx != sz; ++col_idx) {
-      fmt::print("{}\t", min_ks[col_idx]);
-    }
-    fmt::print("\nI: ");
-    for (unsigned col_idx = 0; col_idx != sz; ++col_idx) {
-      if (get_dl_sl_idx_from_min_k_vec(col_idx).has_value()) {
-        fmt::print("{}\t", get_dl_sl_idx_from_min_k_vec(col_idx).value());
-      } else {
-        fmt::print("na\t");
-      }
-    }
-    fmt::print("\n");
   }
 
   void compute_dl_hist()
@@ -176,24 +142,10 @@ private:
       if (min_ks[col_idx] != 0) {
         ocudu_assert(col_idx < min_ks.size() and get_dl_sl_idx_from_min_k_vec(col_idx).has_value() and
                          get_dl_sl_idx_from_min_k_vec(col_idx).value() < dl_hist.size(),
-                     "Wrong idx");
+                     "Column index possibly exceeds vector size");
         dl_hist[get_dl_sl_idx_from_min_k_vec(col_idx).value()].emplace_back(col_idx);
       }
     }
-
-    fmt::print("\nHistogram\n");
-    for (unsigned row_idx = 0; row_idx != sz; ++row_idx) {
-      if (not dl_hist[row_idx].empty()) {
-        ocudu_assert(row_idx < dl_hist.size(), "Wrong idx");
-        for (auto hist : dl_hist[row_idx]) {
-          fmt::print("{}\t", hist);
-        }
-      } else {
-        fmt::print("x\t");
-      }
-      fmt::print("\n");
-    }
-    fmt::print("\n");
   }
 
   // Remove the current min_k from the DL-to-UL matrix of k2 values for a specific UL slot.
@@ -233,14 +185,6 @@ private:
     return candidate_k >= min_k2 ? candidate_k : candidate_k + sz;
   }
 
-  // DL-to-UL matrix: each element dl_to_ul_map(dl_idx, ul_idx) contains k2 value such that dl_idx+k2 = ul_idx, if such
-  // k2 exits; contains 0 otherwise.
-  std::vector<std::vector<unsigned>> dl_to_ul_map;
-
-  // Vector of min_ks; min_ks(ul_idx) contains the min_k2 value that can be used to reach the UL slot "ul_idx"; and the
-  // corresponding "dl_idx" that maps to "ul_idx" with min_ks(ul_idx).
-  std::vector<unsigned> min_ks;
-
   std::optional<unsigned> get_dl_sl_idx_from_min_k_vec(unsigned ul_sl_idx) const
   {
     ocudu_assert(ul_sl_idx < sz, "ul_sl_idx exceeds min_ks vector size");
@@ -250,7 +194,15 @@ private:
     return ul_sl_idx >= min_ks[ul_sl_idx] ? ul_sl_idx - min_ks[ul_sl_idx] : sz + ul_sl_idx - min_ks[ul_sl_idx];
   }
 
-  // Vector of UL indices "reachable" from DL slot idx; dl_hist[dl_idx] contains the list of UL slots that can be
+  // DL-to-UL matrix: each element dl_to_ul_map(dl_idx, ul_idx) contains k2 value such that dl_idx+k2 = ul_idx, if such
+  // k2 exits; contains 0 otherwise.
+  std::vector<std::vector<unsigned>> dl_to_ul_map;
+
+  // Vector of min_ks; min_ks(ul_idx) contains the min_k2 value that can be used to reach the UL slot "ul_idx"; and the
+  // corresponding "dl_idx" that maps to "ul_idx" with min_ks(ul_idx).
+  std::vector<unsigned> min_ks;
+
+  // Vector of UL indices list "reachable" from DL slot idx; dl_hist[dl_idx] contains the list of UL slots that can be
   // reached from dl_idx with the min_k2 saved in \ref dl_idx.
   std::vector<std::vector<unsigned>> dl_hist;
 
