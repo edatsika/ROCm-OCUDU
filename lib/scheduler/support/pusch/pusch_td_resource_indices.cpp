@@ -24,12 +24,12 @@ static unsigned get_min_k1(span<const uint8_t> dl_data_to_ul_ack, const search_s
 
 namespace {
 
-class dl_heavy_tdd
+class dl_heavy_td_resources_idx_builder
 {
 public:
-  dl_heavy_tdd(const tdd_ul_dl_config_common&                            tdd_cfg_common,
-               const std::vector<pusch_time_domain_resource_allocation>& pusch_td_list,
-               unsigned                                                  min_k2_) :
+  dl_heavy_td_resources_idx_builder(const tdd_ul_dl_config_common&                            tdd_cfg_common,
+                                    const std::vector<pusch_time_domain_resource_allocation>& pusch_td_list,
+                                    unsigned                                                  min_k2_) :
     tdd_cfg(tdd_cfg_common),
     pusch_td_alloc_list(pusch_td_list),
     min_k2(min_k2_),
@@ -43,8 +43,8 @@ public:
     }
   }
 
-  //
-  std::vector<static_vector<unsigned, pusch_constants::MAX_NOF_PUSCH_TD_RES_ALLOCS>> get_dl_heavy_tdd()
+  // Compute the index of applicable TDD resource for each DL slot.
+  std::vector<static_vector<unsigned, pusch_constants::MAX_NOF_PUSCH_TD_RES_ALLOCS>> compute_td_res_indices_per_slot()
   {
     struct pattern_element {
       explicit pattern_element(unsigned elem_ = 0, unsigned pattern_idx_ = 0) :
@@ -62,18 +62,18 @@ public:
     // For each of TDD pattern, find the DL slot that is closest to the TDD pattern's last UL slot and such that
     // k2 >= min k2.
     static_vector<std::optional<pattern_element>, MAX_NOF_TDD_PATTERNS> dl_sl_min_k;
-    for (unsigned p_i = 0, p_sz = tdd_patterns.size(); p_i != p_sz; ++p_i) {
-      if (tdd_patterns[p_i].nof_ul_slots == 0) {
+    for (unsigned pattern_idx = 0, p_sz = tdd_patterns.size(); pattern_idx != p_sz; ++pattern_idx) {
+      if (tdd_patterns[pattern_idx].nof_ul_slots == 0) {
         dl_sl_min_k.emplace_back(std::nullopt);
         continue;
       }
-      const unsigned ul_slot_idx = p_i == 0U ? tdd_patterns[p_i].dl_ul_tx_period_nof_slots - 1 : nof_slot - 1;
-      // At this point, all
-      const unsigned pdcch_slot = find_closet_viable_dl_slot(ul_slot_idx);
-      dl_sl_min_k.emplace_back(pattern_element(pdcch_slot, p_i));
+      const unsigned ul_slot_idx =
+          pattern_idx == 0U ? tdd_patterns[pattern_idx].dl_ul_tx_period_nof_slots - 1 : nof_slot - 1;
+      const unsigned pdcch_slot = find_closest_viable_dl_slot(ul_slot_idx);
+      dl_sl_min_k.emplace_back(pattern_element(pdcch_slot, pattern_idx));
     }
 
-    // Find DL slot that has the closet UL slot preceding it.
+    // For each of the DL slot above, find the distance from the DL slot to last UL slot preceding it.
     static_vector<pattern_element, MAX_NOF_TDD_PATTERNS> dl_to_ul_dist;
     for (auto dl_sl : dl_sl_min_k) {
       if (not dl_sl.has_value()) {
@@ -85,6 +85,10 @@ public:
       dl_to_ul_dist.emplace_back(ul_sl, dl_sl->ref_pattern_idx);
     }
 
+    // Sort the TDD patterns based on the distance from the DL slot to last UL slot preceding it. The rationale behind
+    // this is that the distance in question determines how difficult it is for a TDD pattern to find viable DL slots
+    // PDCCHs allocation without the need to jump to the previous TDD pattern. The closest the DL slot to the UL slot
+    // preceding it, the more difficult it is to assign PDCCH (DL) slots to the TDD pattern's UL slots.
     std::sort(
         dl_to_ul_dist.begin(), dl_to_ul_dist.end(), [this](const pattern_element& lhs, const pattern_element& rhs) {
           // If the distance to the previous UL slot is the same, then give priority to the TDD pattern with the more UL
@@ -96,6 +100,7 @@ public:
           return lhs.element < rhs.element;
         });
 
+    // For each TDD pattern, find the closest DL slot that has not been assigned any k2 value.
     for (auto dl_sl : dl_to_ul_dist) {
       for (unsigned ul_sl_cnt = 0U, nof_ul_slots = tdd_patterns[dl_sl.ref_pattern_idx].nof_ul_slots;
            ul_sl_cnt != nof_ul_slots;
@@ -103,7 +108,7 @@ public:
         const unsigned ul_slot_idx = dl_sl.ref_pattern_idx == 0U
                                          ? tdd_patterns[dl_sl.ref_pattern_idx].dl_ul_tx_period_nof_slots - ul_sl_cnt - 1
                                          : nof_slot - ul_sl_cnt - 1;
-        const unsigned pdcch_slot  = find_closet_viable_dl_slot(ul_slot_idx, true);
+        const unsigned pdcch_slot  = find_closest_viable_dl_slot(ul_slot_idx, true);
         ocudu_assert(pdcch_slot < dl_min_k2_vec.size(), "");
         dl_min_k2_vec[pdcch_slot] = get_k2(ul_slot_idx, pdcch_slot);
       }
@@ -156,7 +161,7 @@ private:
     return sl_idx + 1;
   }
 
-  unsigned find_closet_viable_dl_slot(unsigned ul_slot, bool check_dl_slot_is_free = false) const
+  unsigned find_closest_viable_dl_slot(unsigned ul_slot, bool check_dl_slot_is_free = false) const
   {
     unsigned dl_slot = ul_slot >= min_k2 ? ul_slot - min_k2 : ul_slot + nof_slot - min_k2;
     ocudu_assert(dl_min_k2_vec[dl_slot] < dl_min_k2_vec.size(), "Wrong size");
@@ -170,7 +175,7 @@ private:
     return dl_slot;
   }
 
-  unsigned get_k2(unsigned ul_slot, unsigned dl_slot)
+  unsigned get_k2(unsigned ul_slot, unsigned dl_slot) const
   {
     ocudu_assert(ul_slot != dl_slot, "Not expected");
     return ul_slot > dl_slot ? ul_slot - dl_slot : ul_slot + nof_slot - dl_slot;
@@ -182,202 +187,6 @@ private:
   const unsigned                                            nof_slot;
   static_vector<tdd_ul_dl_pattern, MAX_NOF_TDD_PATTERNS>    tdd_patterns;
   std::vector<unsigned>                                     dl_min_k2_vec;
-};
-
-class dl_heavy_td_resources_idx_builder
-{
-public:
-  dl_heavy_td_resources_idx_builder(unsigned                                                  sz_,
-                                    const tdd_ul_dl_config_common&                            tdd_cfg_common,
-                                    const std::vector<pusch_time_domain_resource_allocation>& pusch_td_list) :
-    sz(sz_), tdd_cfg(tdd_cfg_common), pusch_td_alloc_list(pusch_td_list)
-  {
-    dl_to_ul_map.assign(sz, std::vector<unsigned>(sz, 0));
-    min_k2 = std::numeric_limits<unsigned>::max();
-    for (const auto& td_res : pusch_td_alloc_list) {
-      min_k2 = std::min(static_cast<unsigned>(td_res.k2), min_k2);
-    }
-  }
-
-  std::vector<static_vector<unsigned, pusch_constants::MAX_NOF_PUSCH_TD_RES_ALLOCS>> compute_td_res_indices_per_slot()
-  {
-    // Build matrix.
-    build_matrix();
-
-    // Compute the minimum k.
-    compute_min_ks();
-
-    // Compute the hist.
-    compute_dl_hist();
-
-    while (not allocation_complete()) {
-      // // Find all DL slots such that the histogram is > 1;
-      // std::vector<unsigned> dl_slots_non_1_hist;
-      // for (unsigned sl_idx = 0; sl_idx != sz; ++sl_idx) {
-      //   if (dl_hist[sl_idx].size() > 1U) {
-      //     dl_slots_non_1_hist.emplace_back(sl_idx);
-      //   }
-      // }
-
-      // For all DL slots such that the histogram is > 1, the max among the corresponding min_k.
-      unsigned max_min_k         = 0;
-      unsigned dl_slot_max_min_k = 0;
-      for (unsigned dl_sl = 0; dl_sl != sz; ++dl_sl) {
-        if (dl_hist[dl_sl].size() <= 1U) {
-          continue;
-        }
-        for (const unsigned ul_sl : dl_hist[dl_sl]) {
-          if (min_ks[ul_sl] > max_min_k) {
-            max_min_k         = min_ks[ul_sl];
-            dl_slot_max_min_k = dl_sl;
-          }
-        }
-      }
-
-      // Remove max_min_k from
-      // Reprocess UL slots that has the DL slot in common with that of dl_slot_max_min_k.
-      for (const unsigned ul_sl : dl_hist[dl_slot_max_min_k]) {
-        fmt::print("dl_slot_max_min_k={}, ul_sl={}\n", dl_slot_max_min_k, ul_sl);
-        if (compute_k(dl_slot_max_min_k, ul_sl) != max_min_k) {
-          fmt::print("Removing min_k for ul={}\n", dl_hist[dl_slot_max_min_k].front());
-          remove_min_k(dl_hist[dl_slot_max_min_k].front());
-        }
-      }
-
-      // Recompute min ks and DL histogram
-      compute_min_ks();
-      compute_dl_hist();
-    }
-
-    std::vector<static_vector<unsigned, pusch_constants::MAX_NOF_PUSCH_TD_RES_ALLOCS>>
-        pusch_td_resource_indices_per_slot(sz);
-
-    for (unsigned ul_idx = 0; ul_idx != sz; ++ul_idx) {
-      const unsigned min_elem = min_ks[ul_idx];
-      // Only values different from 0 have valid k.
-      if (min_elem != 0U) {
-        const auto& td_res_idx_it = std::find_if(
-            pusch_td_alloc_list.begin(),
-            pusch_td_alloc_list.end(),
-            [min_elem](const pusch_time_domain_resource_allocation& td_res) { return td_res.k2 == min_elem; });
-        ocudu_assert(td_res_idx_it != pusch_td_alloc_list.end(), "Expected TD resource index not found");
-        ocudu_assert(get_dl_sl_idx_from_min_k_vec(ul_idx).has_value() and
-                         get_dl_sl_idx_from_min_k_vec(ul_idx).value() < pusch_td_resource_indices_per_slot.size(),
-                     "dl_index obtained from k2 exceeds vector size");
-        pusch_td_resource_indices_per_slot[get_dl_sl_idx_from_min_k_vec(ul_idx).value()] = {
-            static_cast<unsigned>(std::distance(pusch_td_alloc_list.begin(), td_res_idx_it))};
-      }
-    }
-
-    return pusch_td_resource_indices_per_slot;
-  }
-
-private:
-  // Build dl_to_ul_map matrix of k2 from all DL slots to all possible UL slots.
-  void build_matrix()
-  {
-    for (unsigned row_idx = 0; row_idx != sz; ++row_idx) {
-      for (unsigned col_idx = 0; col_idx != sz; ++col_idx) {
-        dl_to_ul_map[row_idx][col_idx] = compute_k(row_idx, col_idx);
-      }
-    }
-  }
-
-  void compute_min_ks()
-  {
-    min_ks.assign(sz, 0);
-    for (unsigned col_idx = 0; col_idx != sz; ++col_idx) {
-      for (unsigned row_idx = 0; row_idx != sz; ++row_idx) {
-        if (dl_to_ul_map[row_idx][col_idx] == 0) {
-          continue;
-        }
-        if (min_ks[col_idx] != 0) {
-          if (const bool update_row = dl_to_ul_map[row_idx][col_idx] < min_ks[col_idx]; update_row) {
-            min_ks[col_idx] = dl_to_ul_map[row_idx][col_idx];
-          }
-        } else {
-          min_ks[col_idx] = dl_to_ul_map[row_idx][col_idx];
-        }
-      }
-    }
-  }
-
-  void compute_dl_hist()
-  {
-    dl_hist.assign(sz, {});
-    for (unsigned col_idx = 0; col_idx != sz; ++col_idx) {
-      if (min_ks[col_idx] != 0) {
-        ocudu_assert(col_idx < min_ks.size() and get_dl_sl_idx_from_min_k_vec(col_idx).has_value() and
-                         get_dl_sl_idx_from_min_k_vec(col_idx).value() < dl_hist.size(),
-                     "Column index possibly exceeds vector size");
-        dl_hist[get_dl_sl_idx_from_min_k_vec(col_idx).value()].emplace_back(col_idx);
-      }
-    }
-  }
-
-  // Remove the current min_k from the DL-to-UL matrix of k2 values for a specific UL slot.
-  void remove_min_k(unsigned ul_sl)
-  {
-    ocudu_assert(ul_sl < min_ks.size() and get_dl_sl_idx_from_min_k_vec(ul_sl) < dl_to_ul_map.size() and
-                     get_dl_sl_idx_from_min_k_vec(ul_sl).has_value() and
-                     ul_sl < dl_to_ul_map[get_dl_sl_idx_from_min_k_vec(ul_sl).value()].size(),
-                 "Wrong size");
-    dl_to_ul_map[get_dl_sl_idx_from_min_k_vec(ul_sl).value()][ul_sl] = 0;
-  }
-
-  bool allocation_complete() const
-  {
-    bool complete = true;
-    for (unsigned dl_sl_idx = 0; dl_sl_idx != sz; ++dl_sl_idx) {
-      if (has_active_tdd_dl_symbols(tdd_cfg, dl_sl_idx) and dl_hist[dl_sl_idx].size() > 1) {
-        complete = false;
-      }
-    }
-
-    for (unsigned ul_sl_idx = 0; ul_sl_idx != sz; ++ul_sl_idx) {
-      if (is_tdd_full_ul_slot(tdd_cfg, ul_sl_idx) and min_ks[ul_sl_idx] == 0U) {
-        complete = false;
-      }
-    }
-
-    return complete;
-  }
-
-  unsigned compute_k(unsigned dl_sl, unsigned ul_sl) const
-  {
-    if (not is_tdd_full_ul_slot(tdd_cfg, ul_sl) or not has_active_tdd_dl_symbols(tdd_cfg, dl_sl)) {
-      return 0U;
-    }
-    const unsigned candidate_k = ul_sl > dl_sl ? ul_sl - dl_sl : sz + ul_sl - dl_sl;
-    return candidate_k >= min_k2 ? candidate_k : candidate_k + sz;
-  }
-
-  std::optional<unsigned> get_dl_sl_idx_from_min_k_vec(unsigned ul_sl_idx) const
-  {
-    ocudu_assert(ul_sl_idx < sz, "ul_sl_idx exceeds min_ks vector size");
-    if (min_ks[ul_sl_idx] == 0) {
-      return std::nullopt;
-    }
-    return ul_sl_idx >= min_ks[ul_sl_idx] ? ul_sl_idx - min_ks[ul_sl_idx] : sz + ul_sl_idx - min_ks[ul_sl_idx];
-  }
-
-  // DL-to-UL matrix: each element dl_to_ul_map(dl_idx, ul_idx) contains k2 value such that dl_idx+k2 = ul_idx, if such
-  // k2 exits; contains 0 otherwise.
-  std::vector<std::vector<unsigned>> dl_to_ul_map;
-
-  // Vector of min_ks; min_ks(ul_idx) contains the min_k2 value that can be used to reach the UL slot "ul_idx"; and the
-  // corresponding "dl_idx" that maps to "ul_idx" with min_ks(ul_idx).
-  std::vector<unsigned> min_ks;
-
-  // Vector of UL indices list "reachable" from DL slot idx; dl_hist[dl_idx] contains the list of UL slots that can be
-  // reached from dl_idx with the min_k2 saved in \ref dl_idx.
-  std::vector<std::vector<unsigned>> dl_hist;
-
-  // Initialize this matrix.
-  const unsigned                                            sz;
-  const tdd_ul_dl_config_common&                            tdd_cfg;
-  const std::vector<pusch_time_domain_resource_allocation>& pusch_td_alloc_list;
-  unsigned                                                  min_k2;
 };
 } // anonymous namespace
 
@@ -517,14 +326,7 @@ ocudu::get_fairly_distributed_pusch_td_resource_indices(subcarrier_spacing      
 
   const unsigned nof_dl_slots      = nof_dl_slots_per_tdd_period(tdd_cfg_common);
   const unsigned nof_full_ul_slots = nof_full_ul_slots_per_tdd_period(tdd_cfg_common);
-
-  const unsigned nof_slots = nof_slots_per_tdd_period(tdd_cfg_common);
-
-  // In DL-heavy case, we do not need to proceed further.
-  if (nof_dl_slots >= nof_full_ul_slots) {
-    dl_heavy_td_resources_idx_builder dl_hv_builder(nof_slots, tdd_cfg_common, pusch_cfg_common.pusch_td_alloc_list);
-    return dl_hv_builder.compute_td_res_indices_per_slot();
-  }
+  const unsigned nof_slots         = nof_slots_per_tdd_period(tdd_cfg_common);
 
   // Fetch the relevant PUSCH time domain resource list.
   span<const pusch_time_domain_resource_allocation> pusch_time_domain_list =
@@ -668,11 +470,9 @@ ocudu::get_pusch_td_resource_indices_per_slot(subcarrier_spacing                
                          [](const pusch_time_domain_resource_allocation& lhs,
                             const pusch_time_domain_resource_allocation& rhs) { return lhs.k2 < rhs.k2; });
     ocudu_assert(k2_it != pusch_cfg_common.pusch_td_alloc_list.end(), "min k2 must exist");
-    dl_heavy_tdd dl_hv_builder(tdd_cfg_common.value(), pusch_cfg_common.pusch_td_alloc_list, k2_it->k2);
-    return dl_hv_builder.get_dl_heavy_tdd();
-    // dl_heavy_td_resources_idx_builder dl_hv_builder(
-    //     nof_slots, tdd_cfg_common.value(), pusch_cfg_common.pusch_td_alloc_list);
-    // return dl_hv_builder.compute_td_res_indices_per_slot();
+    dl_heavy_td_resources_idx_builder dl_hv_builder(
+        tdd_cfg_common.value(), pusch_cfg_common.pusch_td_alloc_list, k2_it->k2);
+    return dl_hv_builder.compute_td_res_indices_per_slot();
   }
 
   // UL-heavy case
