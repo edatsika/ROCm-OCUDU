@@ -9,6 +9,7 @@
 #include "ocudu/phy/support/prach_buffer_context.h"
 #include "ocudu/phy/support/shared_resource_grid.h"
 #include "ocudu/phy/upper/upper_phy_error_handler.h"
+#include "ocudu/phy/upper/upper_phy_operational_status_change_request_notifier.h"
 #include "ocudu/phy/upper/upper_phy_rg_gateway.h"
 #include "ocudu/phy/upper/upper_phy_rx_symbol_handler.h"
 #include "ocudu/phy/upper/upper_phy_rx_symbol_request_notifier.h"
@@ -197,6 +198,18 @@ public:
 
 private:
   std::vector<upper_phy_error_handler*> handlers;
+};
+
+/// Upper PHY - Radio Unit operational status change request notifier adapter.
+class upper_phy_ru_operational_status_change_request_notifier_adapter
+  : public upper_phy_operational_status_change_request_notifier
+{
+public:
+  // See interface for documentation.
+  void on_start_request() override {}
+
+  // See interface for documentation.
+  void on_stop_request() override {}
 };
 
 } // namespace ocudu

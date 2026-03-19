@@ -41,6 +41,8 @@ void flexible_o_du_impl::add_ru(std::unique_ptr<radio_unit> active_ru)
   // Connect the RU adaptor to the RU.
   ru_dl_rg_adapt.connect(ru->get_downlink_plane_handler());
   ru_ul_request_adapt.connect(ru->get_uplink_plane_handler());
+  // TODO: connect the operational status change request notifier when the RU provides the interface. Be careful with
+  // the cell mapping, as it is not introduced now.
 
   // Update the RU metrics collector.
   if (auto* collector = ru->get_metrics_collector()) {

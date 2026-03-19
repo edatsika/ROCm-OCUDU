@@ -37,9 +37,10 @@ static odu::du_low_dependencies generate_du_low_dependencies(const o_du_low_unit
   }
 
   for (unsigned i = 0, e = nof_cells; i != e; ++i) {
-    upper_phy_dependencies& upper_phy_cell    = out_deps.cells.emplace_back().upper_phy_deps;
-    upper_phy_cell.rg_gateway                 = &dependencies.rg_gateway;
-    upper_phy_cell.rx_symbol_request_notifier = &dependencies.rx_symbol_request_notifier;
+    upper_phy_dependencies& upper_phy_cell             = out_deps.cells.emplace_back().upper_phy_deps;
+    upper_phy_cell.rg_gateway                          = &dependencies.rg_gateway;
+    upper_phy_cell.rx_symbol_request_notifier          = &dependencies.rx_symbol_request_notifier;
+    upper_phy_cell.operational_change_request_notifier = &dependencies.operational_request_notifier;
   }
 
   return out_deps;

@@ -20,6 +20,7 @@
 namespace ocudu {
 
 class task_executor;
+class upper_phy_operational_status_change_request_notifier;
 class upper_phy_rg_gateway;
 class upper_phy_rx_symbol_request_notifier;
 
@@ -241,6 +242,8 @@ struct upper_phy_dependencies {
   upper_phy_rg_gateway* rg_gateway;
   /// Received symbol request notifier.
   upper_phy_rx_symbol_request_notifier* rx_symbol_request_notifier;
+  /// Operational status change request notifier.
+  upper_phy_operational_status_change_request_notifier* operational_change_request_notifier;
 };
 
 /// Returns true if the given upper PHY configuration is valid, otherwise false.

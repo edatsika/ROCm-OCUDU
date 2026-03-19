@@ -47,17 +47,22 @@ public:
   upper_phy_ru_error_adapter&      get_upper_ru_error_adapter() { return ru_error_adapt; }
   upper_phy_ru_dl_rg_adapter&      get_upper_ru_dl_rg_adapter() { return ru_dl_rg_adapt; }
   upper_phy_ru_ul_request_adapter& get_upper_ru_ul_request_adapter() { return ru_ul_request_adapt; }
+  upper_phy_operational_status_change_request_notifier& get_upper_ru_operational_request_adapter()
+  {
+    return ru_operational_request_adapter;
+  }
 
 private:
-  const unsigned                   nof_cells;
-  upper_phy_ru_ul_adapter          ru_ul_adapt;
-  upper_phy_ru_timing_adapter      ru_timing_adapt;
-  upper_phy_ru_error_adapter       ru_error_adapt;
-  flexible_o_du_metrics_aggregator odu_metrics_handler;
-  std::unique_ptr<odu::o_du>       du;
-  std::unique_ptr<radio_unit>      ru;
-  upper_phy_ru_dl_rg_adapter       ru_dl_rg_adapt;
-  upper_phy_ru_ul_request_adapter  ru_ul_request_adapt;
+  const unsigned                                                  nof_cells;
+  upper_phy_ru_ul_adapter                                         ru_ul_adapt;
+  upper_phy_ru_timing_adapter                                     ru_timing_adapt;
+  upper_phy_ru_error_adapter                                      ru_error_adapt;
+  flexible_o_du_metrics_aggregator                                odu_metrics_handler;
+  std::unique_ptr<odu::o_du>                                      du;
+  std::unique_ptr<radio_unit>                                     ru;
+  upper_phy_ru_dl_rg_adapter                                      ru_dl_rg_adapt;
+  upper_phy_ru_ul_request_adapter                                 ru_ul_request_adapt;
+  upper_phy_ru_operational_status_change_request_notifier_adapter ru_operational_request_adapter;
 };
 
 } // namespace ocudu

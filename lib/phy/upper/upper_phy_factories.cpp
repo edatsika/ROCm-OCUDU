@@ -435,10 +435,11 @@ public:
   std::unique_ptr<upper_phy> create(const upper_phy_configuration& config, const upper_phy_dependencies& deps) override
   {
     upper_phy_impl_config phy_config;
-    phy_config.pusch_max_nof_layers        = config.pusch_max_nof_layers;
-    phy_config.log_level                   = factory_config.log_level;
-    phy_config.rx_symbol_request_notifier  = deps.rx_symbol_request_notifier;
-    phy_config.nof_slots_ul_pdu_repository = config.nof_ul_rg;
+    phy_config.pusch_max_nof_layers         = config.pusch_max_nof_layers;
+    phy_config.log_level                    = factory_config.log_level;
+    phy_config.rx_symbol_request_notifier   = deps.rx_symbol_request_notifier;
+    phy_config.operational_request_notifier = deps.operational_change_request_notifier;
+    phy_config.nof_slots_ul_pdu_repository  = config.nof_ul_rg;
 
     phy_config.dl_rg_pool = create_dl_resource_grid_pool(factory_deps, config, rg_factory);
     report_fatal_error_if_not(phy_config.dl_rg_pool, "Invalid downlink resource grid pool.");

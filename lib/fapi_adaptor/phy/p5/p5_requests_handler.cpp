@@ -68,14 +68,24 @@ void p5_requests_handler::send_config_request(const fapi::config_request& msg)
 
 void p5_requests_handler::send_start_request(const fapi::start_request& msg)
 {
-  if (!executor.defer([this, token = stop_manager.get_token()]() { upper_phy_controller.start(); })) {
+  auto token = stop_manager.get_token();
+  if (OCUDU_UNLIKELY(token.is_stop_requested())) {
+    return;
+  }
+
+  if (!executor.defer([this, tk = std::move(token)]() { upper_phy_controller.start(); })) {
     logger.warning("Sector #{}: PHY-FAPI P5 sector adaptor failed to enqueue start task ", sector);
   }
 }
 
 void p5_requests_handler::send_stop_request(const fapi::stop_request& msg)
 {
-  if (!executor.defer([this, token = stop_manager.get_token()]() {
+  auto token = stop_manager.get_token();
+  if (OCUDU_UNLIKELY(token.is_stop_requested())) {
+    return;
+  }
+
+  if (!executor.defer([this, tk = std::move(token)]() {
         upper_phy_controller.stop();
 
         fapi::stop_indication indication;
