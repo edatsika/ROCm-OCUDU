@@ -6,6 +6,8 @@
 #include "../support/dci_builder.h"
 #include "../ue_context/ue_drx_controller.h"
 #include "grant_params_selector.h"
+#include "ocudu/adt/static_vector.h"
+#include "ocudu/scheduler/config/pusch_td_resource_indices.h"
 #include "ocudu/scheduler/result/dci_info.h"
 #include "ocudu/support/error_handling.h"
 
@@ -28,6 +30,31 @@ ue_cell_grid_allocator::ue_cell_grid_allocator(const scheduler_ue_expert_config&
 {
   dl_grants.reserve(MAX_UE_PDUS_PER_SLOT);
   ul_grants.reserve(MAX_PUSCH_PDUS_PER_SLOT);
+
+  if (cell_alloc.cfg.params.tdd_cfg.has_value()) {
+    // Only for TDD DL-heavy configurations.
+    if (nof_dl_slots_per_tdd_period(cell_alloc.cfg.params.tdd_cfg.value()) >=
+        nof_full_ul_slots_per_tdd_period(cell_alloc.cfg.params.tdd_cfg.value())) {
+      const auto pusch_list = get_pusch_td_resource_indices_per_slot(
+          cell_alloc.cfg.scs_common(),
+          cell_alloc.cfg.params.tdd_cfg,
+          cell_alloc.cfg.params.ul_cfg_common.init_ul_bwp.pusch_cfg_common.value(),
+          cell_alloc.cfg.dl_data_to_ul_ack);
+      min_k2_per_dl_slot.reserve(pusch_list.size());
+
+      cell_alloc.cfg.params.ul_cfg_common.init_ul_bwp.pusch_cfg_common.value().pusch_td_alloc_list;
+      for (unsigned i = 0, sz = pusch_list.size(); i != sz; ++i) {
+        if (not has_active_tdd_dl_symbols(cell_alloc.cfg.params.tdd_cfg.value(), i)) {
+          min_k2_per_dl_slot[i] = 0U;
+          continue;
+        }
+        ocudu_assert(pusch_list[i].size() == 1, "");
+        min_k2_per_dl_slot[i] = pusch_list[i].front();
+      }
+    }
+  }
+
+  const auto& tdd_cfg = cell_alloc.cfg.params.tdd_cfg.has_value();
 }
 
 std::optional<sch_mcs_tbs>
@@ -103,14 +130,29 @@ ue_cell_grid_allocator::alloc_dl_pdcch(const ue_cell& ue_cc, const search_space_
 
 std::optional<uci_allocation> ue_cell_grid_allocator::alloc_uci(const ue_cell&           ue_cc,
                                                                 const search_space_info& ss_info,
-                                                                uint8_t                  pdsch_td_res_index) const
+                                                                uint8_t                  pdsch_td_res_index,
+                                                                std::optional<unsigned>  min_k2) const
 {
+  ocudu_sanity_check(not min_k2.has_value() or min_k2.value() != 0, "If min k2 is provided, it must be non-zero");
+
   const pdsch_time_domain_resource_allocation& pdsch_td_cfg = ss_info.pdsch_time_domain_list[pdsch_td_res_index];
 
   // Allocate UCI. UCI destination (i.e., PUCCH or PUSCH) depends on whether there exist a PUSCH grant for the UE.
-  span<const uint8_t>           k1_list = ss_info.get_k1_candidates();
-  std::optional<uci_allocation> uci =
-      uci_alloc.alloc_harq_ack(cell_alloc, ue_cc.rnti(), ue_cc.cfg(), pdsch_td_cfg.k0, k1_list);
+  span<const uint8_t> k1_list = ss_info.get_k1_candidates();
+
+  // If (DL) PDSCH slot has a k2 value, consider only k1 values >= DL slot k2.
+  auto k1_list_start = k1_list.begin();
+  if (min_k2.has_value()) {
+    const auto min_k1_it = std::find_if(
+        k1_list.begin(), k1_list.end(), [min_k1 = min_k2.value()](const unsigned k1_val) { return k1_val >= min_k1; });
+    ocudu_sanity_check(
+        min_k1_it != k1_list.end(),
+        "There must be at a k1 value that is greater than or equal to k2. Check if TDD config is supported");
+    k1_list_start = min_k1_it;
+  }
+
+  std::optional<uci_allocation> uci = uci_alloc.alloc_harq_ack(
+      cell_alloc, ue_cc.rnti(), ue_cc.cfg(), pdsch_td_cfg.k0, span<const uint8_t>(k1_list_start, k1_list.end()));
   if (not uci.has_value()) {
     logger.debug("ue={} rnti={}: Failed to allocate PDSCH. Cause: UCI allocation failed.",
                  fmt::underlying(ue_cc.ue_index),
@@ -183,7 +225,18 @@ ue_cell_grid_allocator::setup_dl_grant_builder(const slice_ue&                  
 
   if (not dl_harq_feedback_disabled or user.ran_slice_id() == SRB_RAN_SLICE_ID) {
     // Allocate UCI.
-    uci_result = alloc_uci(ue_cc, ss_info, pdsch_td_res_index);
+    // For TDD DL-heavy only: some DL slots have k2 values larger than min k2. Pass it to the UCI allocator so that it
+    // can choose k1 >= DL slot k2.
+    std::optional<unsigned> dl_slot_min_k2;
+    // For FDD and TDD UL-heavy, min_k2_per_dl_slot is empty.
+    if (not min_k2_per_dl_slot.empty()) {
+      dl_slot_min_k2 = min_k2_per_dl_slot[pdsch_alloc.slot.count() % static_cast<uint32_t>(min_k2_per_dl_slot.size())];
+      // If there is no k2 value for this specific DL slot, then we consider it as not set.
+      if (dl_slot_min_k2 == 0) {
+        dl_slot_min_k2.reset();
+      }
+    }
+    uci_result = alloc_uci(ue_cc, ss_info, pdsch_td_res_index, dl_slot_min_k2);
     if (not uci_result.has_value()) {
       ++pdcch_alloc.result.failed_attempts.uci;
       pdcch_sched.cancel_last_pdcch(pdcch_alloc);
