@@ -6,6 +6,7 @@
 
 namespace ocudu {
 
+class ru_cell_operation_controller;
 class ru_controller;
 class ru_downlink_plane_handler;
 class ru_metrics_collector;

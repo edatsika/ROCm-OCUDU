@@ -10,6 +10,27 @@
 
 namespace ocudu {
 
+/// \brief Radio Unit - cell operation control interface.
+///
+/// Allows starting and stopping a cell of the Radio Unit.
+class ru_cell_operation_controller
+{
+public:
+  virtual ~ru_cell_operation_controller() = default;
+
+  /// \brief Starts the cell operation of this Radio Unit.
+  ///
+  /// \param sector_id Cell identifier.
+  /// \note Caller will be blocked until the controller is fully started.
+  virtual void start(unsigned sector_id) = 0;
+
+  /// \brief Stops the cell operation of this Radio Unit.
+  ///
+  /// \param sector_id Cell identifier.
+  /// \note Caller will be blocked until the controller is fully stopped.
+  virtual void stop(unsigned sector_id) = 0;
+};
+
 /// \brief Radio Unit - operation control interface.
 ///
 /// Allows starting and stopping the Radio Unit.
@@ -137,6 +158,9 @@ public:
 
   /// Returns the operation controller of this Radio Unit.
   virtual ru_operation_controller& get_operation_controller() = 0;
+
+  /// Returns the cell operation controller of this Radio Unit.
+  virtual ru_cell_operation_controller& get_cell_operation_controller() = 0;
 
   /// Returns the gain controller of this Radio Unit or nullptr if the Radio Unit does not support it.
   virtual ru_gain_controller* get_gain_controller() = 0;
