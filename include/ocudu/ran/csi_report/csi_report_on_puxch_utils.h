@@ -8,20 +8,31 @@
 
 namespace ocudu {
 
-/// Gets the number of CSI-RS antenna ports from the PMI codebook type.
-inline unsigned csi_report_get_nof_csi_rs_antenna_ports(pmi_codebook_type pmi_codebook)
+inline unsigned csi_report_get_nof_csi_rs_antenna_ports(std::monostate)
 {
-  switch (pmi_codebook) {
-    case pmi_codebook_type::one:
-      return 1;
-    case pmi_codebook_type::two:
-      return 2;
-    case pmi_codebook_type::typeI_single_panel_4ports_mode1:
-      return 4;
-    case pmi_codebook_type::other:
-    default:
-      return 0;
-  }
+  return 0;
+}
+
+inline unsigned csi_report_get_nof_csi_rs_antenna_ports(pmi_codebook_one_port)
+{
+  return 1;
+}
+
+inline unsigned csi_report_get_nof_csi_rs_antenna_ports(pmi_codebook_two_port)
+{
+  return 2;
+}
+
+inline unsigned csi_report_get_nof_csi_rs_antenna_ports(const pmi_codebook_typeI_single_panel& codebook)
+{
+  pmi_codebook_single_panel_info panel_config = get_single_panel_info(codebook.n1_n2);
+  return 2 * panel_config.n1 * panel_config.n2;
+}
+
+/// Gets the number of CSI-RS antenna ports from the PMI codebook type.
+inline unsigned csi_report_get_nof_csi_rs_antenna_ports(const pmi_codebook_config& pmi_codebook)
+{
+  return std::visit([](const auto& item) { return csi_report_get_nof_csi_rs_antenna_ports(item); }, pmi_codebook);
 }
 
 } // namespace ocudu

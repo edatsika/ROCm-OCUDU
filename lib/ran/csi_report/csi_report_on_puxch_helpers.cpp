@@ -9,42 +9,71 @@
 
 using namespace ocudu;
 
-/// Gets the RI, LI, wideband CQI, and CRI fields bit-width as per TS38.212 Table 6.3.1.1.2-3.
-static ri_li_cqi_cri_sizes get_ri_li_cqi_cri_sizes_typeI_single_panel(unsigned                 nof_csi_antenna_ports,
-                                                                      ri_restriction_type      ri_restriction,
-                                                                      csi_report_data::ri_type ri,
-                                                                      unsigned                 nof_csi_rs_resources)
+static ri_li_cqi_cri_sizes
+get_codebook_ri_li_cqi_cri_sizes(const std::monostate&, ri_restriction_type, csi_report_data::ri_type, unsigned)
 {
+  report_error("Failed to get codebook RI/LI/CRI sizes: invalid codebook configuration.");
+}
+
+static ri_li_cqi_cri_sizes get_codebook_ri_li_cqi_cri_sizes(const pmi_codebook_one_port&,
+                                                            ri_restriction_type,
+                                                            csi_report_data::ri_type,
+                                                            unsigned nof_csi_rs_resources)
+{
+  return {.ri                         = 0,
+          .li                         = 0,
+          .wideband_cqi_first_tb      = 4,
+          .wideband_cqi_second_tb     = 0,
+          .subband_diff_cqi_first_tb  = 2,
+          .subband_diff_cqi_second_tb = 0,
+          .cri                        = log2_ceil(nof_csi_rs_resources)};
+}
+
+static ri_li_cqi_cri_sizes get_codebook_ri_li_cqi_cri_sizes(const pmi_codebook_two_port&,
+                                                            ri_restriction_type      ri_restriction,
+                                                            csi_report_data::ri_type ri,
+                                                            unsigned                 nof_csi_rs_resources)
+{
+  unsigned ri_uint              = ri.value();
+  unsigned ri_restriction_count = static_cast<unsigned>(ri_restriction.count());
+
+  return {.ri                         = std::min(1U, log2_ceil(ri_restriction_count)),
+          .li                         = log2_ceil(ri_uint),
+          .wideband_cqi_first_tb      = 4,
+          .wideband_cqi_second_tb     = 0,
+          .subband_diff_cqi_first_tb  = 2,
+          .subband_diff_cqi_second_tb = 0,
+          .cri                        = log2_ceil(nof_csi_rs_resources)};
+}
+
+/// Returns the field bit-widths for RI, LI, wideband CQI, and CRI for Type I, single-panel codebook as per
+/// TS38.212 Table 6.3.1.1.2-3.
+static ri_li_cqi_cri_sizes get_codebook_ri_li_cqi_cri_sizes(const pmi_codebook_typeI_single_panel& pmi_codebook,
+                                                            ri_restriction_type                    ri_restriction,
+                                                            csi_report_data::ri_type               ri,
+                                                            unsigned                               nof_csi_rs_resources)
+{
+  unsigned nof_csi_antenna_ports = csi_report_get_nof_csi_rs_antenna_ports(pmi_codebook);
+  ocudu_assert(nof_csi_antenna_ports == 4, "Only four ports are currently supported.");
+
   ri_li_cqi_cri_sizes result;
 
   unsigned ri_uint              = ri.value();
   unsigned ri_restriction_count = static_cast<unsigned>(ri_restriction.count());
 
   // Calculate RI field size.
-  if (nof_csi_antenna_ports == 1) {
-    result.ri = 0;
-  } else {
-    ocudu_assert(ri_restriction.find_lowest(true) >= 0,
-                 "The RI restriction field (i.e., {}) must have at least one true value.",
-                 ri_restriction);
+  ocudu_assert(ri_restriction.find_lowest(true) >= 0,
+               "The RI restriction field (i.e., {}) must have at least one true value.",
+               ri_restriction);
 
-    if (nof_csi_antenna_ports == 2) {
-      result.ri = std::min(1U, log2_ceil(ri_restriction_count));
-    } else if (nof_csi_antenna_ports == 4) {
-      result.ri = std::min(2U, log2_ceil(ri_restriction_count));
-    } else {
-      result.ri = log2_ceil(ri_restriction_count);
-    }
+  if (nof_csi_antenna_ports == 4) {
+    result.ri = std::min(2U, log2_ceil(ri_restriction_count));
+  } else {
+    result.ri = log2_ceil(ri_restriction_count);
   }
 
   // Calculate LI field size.
-  if (nof_csi_antenna_ports == 1) {
-    result.li = 0;
-  } else if (nof_csi_antenna_ports == 2) {
-    result.li = log2_ceil(ri_uint);
-  } else {
-    result.li = std::min(2U, log2_ceil(ri_uint));
-  }
+  result.li = std::min(2U, log2_ceil(ri_uint));
 
   // Wideband CQI for the first TB field size.
   result.wideband_cqi_first_tb = 4;
@@ -66,6 +95,16 @@ static ri_li_cqi_cri_sizes get_ri_li_cqi_cri_sizes_typeI_single_panel(unsigned  
     result.subband_diff_cqi_second_tb = 0;
   }
 
+  result.cri = log2_ceil(nof_csi_rs_resources);
+
+  return result;
+}
+
+ri_li_cqi_cri_sizes ocudu::get_ri_li_cqi_cri_sizes(pmi_codebook_config      pmi_codebook,
+                                                   ri_restriction_type      ri_restriction,
+                                                   csi_report_data::ri_type ri,
+                                                   unsigned                 nof_csi_rs_resources)
+{
   // Calculate CRI field size. The number of CSI resources in the corresponding resource set must be at least one and up
   // to 64 (see TS38.331 Section 6.3.2, Information Element \c NZP-CSI-RS-ResourceSet).
   constexpr interval<unsigned, true> nof_csi_res_range(1, 64);
@@ -73,28 +112,12 @@ static ri_li_cqi_cri_sizes get_ri_li_cqi_cri_sizes_typeI_single_panel(unsigned  
                "The number of CSI-RS resources in the resource set, i.e., {} exceeds the valid range {}.",
                nof_csi_rs_resources,
                nof_csi_res_range);
-  result.cri = log2_ceil(nof_csi_rs_resources);
 
-  return result;
-}
-
-ri_li_cqi_cri_sizes ocudu::get_ri_li_cqi_cri_sizes(pmi_codebook_type        pmi_codebook,
-                                                   ri_restriction_type      ri_restriction,
-                                                   csi_report_data::ri_type ri,
-                                                   unsigned                 nof_csi_rs_resources)
-{
-  unsigned nof_csi_antenna_ports = csi_report_get_nof_csi_rs_antenna_ports(pmi_codebook);
-
-  switch (pmi_codebook) {
-    case pmi_codebook_type::one:
-    case pmi_codebook_type::two:
-    case pmi_codebook_type::typeI_single_panel_4ports_mode1:
-      return get_ri_li_cqi_cri_sizes_typeI_single_panel(
-          nof_csi_antenna_ports, ri_restriction, ri, nof_csi_rs_resources);
-    case pmi_codebook_type::other:
-    default:
-      return {};
-  }
+  return std::visit(
+      [ri_restriction, ri, nof_csi_rs_resources](const auto& item) {
+        return get_codebook_ri_li_cqi_cri_sizes(item, ri_restriction, ri, nof_csi_rs_resources);
+      },
+      pmi_codebook);
 }
 
 namespace {
@@ -111,13 +134,15 @@ struct csi_report_typeI_single_panel_pmi_sizes {
 
 /// Gets PMI sizes for TypeI-SinglePanel, Mode 1 codebook configuration as per TS38.212 Table 6.3.1.1.2-1.
 static csi_report_typeI_single_panel_pmi_sizes
-csi_report_get_pmi_sizes_typeI_single_panel_mode1(unsigned                 N1,
-                                                  unsigned                 N2,
-                                                  unsigned                 O1,
-                                                  unsigned                 O2,
-                                                  unsigned                 nof_csi_rs_antenna_ports,
-                                                  csi_report_data::ri_type ri)
+csi_report_get_pmi_sizes_typeI_single_panel_mode1(const pmi_codebook_single_panel_info& panel_info,
+                                                  csi_report_data::ri_type              ri)
 {
+  unsigned nof_csi_rs_antenna_ports = 2 * panel_info.n1 * panel_info.n2;
+  unsigned N1                       = panel_info.n1;
+  unsigned N2                       = panel_info.n2;
+  unsigned O1                       = panel_info.o1;
+  unsigned O2                       = panel_info.o2;
+
   if ((ri == 1) && (nof_csi_rs_antenna_ports > 2) && (N2 == 1)) {
     return {log2_ceil(N1 * O1), log2_ceil(N2 * O2), 0, 2};
   }
@@ -137,8 +162,17 @@ csi_report_get_pmi_sizes_typeI_single_panel_mode1(unsigned                 N1,
   report_error("Unhandled case with ri={} nof_csi_rs_antenna_ports={} N2={}.", ri, nof_csi_rs_antenna_ports, N2);
 }
 
-/// Gets PMI field bit-width for TypeI-SinglePanel and two port.
-static unsigned csi_report_get_size_pmi_two_port(csi_report_data::ri_type ri)
+static unsigned get_size_pmi(std::monostate, csi_report_data::ri_type)
+{
+  report_error("Failed to get PMI size: invalid codebook configuration.");
+}
+
+static unsigned get_size_pmi(pmi_codebook_one_port, csi_report_data::ri_type)
+{
+  return 0;
+}
+
+static unsigned get_size_pmi(pmi_codebook_two_port, csi_report_data::ri_type ri)
 {
   ocudu_assert(ri <= 2, "Invalid rank indicator (i.e., {}).", ri);
   if (ri == 2) {
@@ -148,20 +182,14 @@ static unsigned csi_report_get_size_pmi_two_port(csi_report_data::ri_type ri)
   return 2;
 }
 
-/// Gets PMI field bit-width for TypeI-SinglePanel, four port and mode 1.
-static unsigned csi_report_get_size_pmi_typeI_single_panel_4ports_mode1(unsigned nof_csi_rs_antenna_ports,
-                                                                        csi_report_data::ri_type ri)
+static unsigned get_size_pmi(const pmi_codebook_typeI_single_panel& codebook, csi_report_data::ri_type ri)
 {
+  ocudu_assert(codebook.mode == pmi_codebook_typeI_mode::one, "Only mode 1 is currently supported.");
+
   unsigned count = 0;
 
-  // Select values N1, N2, O1 and O2 from TS38.214 Table 5.2.2.2.1-2.
-  unsigned N1 = 2;
-  unsigned N2 = 1;
-  unsigned O1 = 4;
-  unsigned O2 = 1;
-
   csi_report_typeI_single_panel_pmi_sizes sizes =
-      csi_report_get_pmi_sizes_typeI_single_panel_mode1(N1, N2, O1, O2, nof_csi_rs_antenna_ports, ri);
+      csi_report_get_pmi_sizes_typeI_single_panel_mode1(get_single_panel_info(codebook.n1_n2), ri);
 
   count += sizes.i_1_1;
   count += sizes.i_1_2;
@@ -171,19 +199,9 @@ static unsigned csi_report_get_size_pmi_typeI_single_panel_4ports_mode1(unsigned
   return count;
 }
 
-unsigned ocudu::csi_report_get_size_pmi(pmi_codebook_type codebook, csi_report_data::ri_type ri)
+unsigned ocudu::csi_report_get_size_pmi(pmi_codebook_config codebook, csi_report_data::ri_type ri)
 {
-  unsigned nof_csi_rs_antenna_ports = csi_report_get_nof_csi_rs_antenna_ports(codebook);
-  switch (codebook) {
-    case pmi_codebook_type::two:
-      return csi_report_get_size_pmi_two_port(ri);
-    case pmi_codebook_type::typeI_single_panel_4ports_mode1:
-      return csi_report_get_size_pmi_typeI_single_panel_4ports_mode1(nof_csi_rs_antenna_ports, ri);
-    case pmi_codebook_type::one:
-    case pmi_codebook_type::other:
-    default:
-      return 0;
-  }
+  return std::visit([ri](const auto& item) { return get_size_pmi(item, ri); }, codebook);
 }
 
 csi_report_data::wideband_cqi_type ocudu::csi_report_unpack_wideband_cqi(csi_report_packed packed)
@@ -192,8 +210,18 @@ csi_report_data::wideband_cqi_type ocudu::csi_report_unpack_wideband_cqi(csi_rep
   return packed.extract(0, 4);
 }
 
-/// Unpacks PMI for TypeI-SinglePort and two ports.
-static csi_report_pmi csi_report_unpack_pmi_two_antenna_port(const csi_report_packed& packed)
+static csi_report_pmi unpack_pmi(const std::monostate&, const csi_report_packed&, csi_report_data::ri_type)
+{
+  report_error("Failed to unpack PMI: invalid codebook configuration.");
+}
+
+static csi_report_pmi unpack_pmi(const pmi_codebook_one_port&, const csi_report_packed&, csi_report_data::ri_type)
+{
+  return {};
+}
+
+static csi_report_pmi
+unpack_pmi(const pmi_codebook_two_port&, const csi_report_packed& packed, csi_report_data::ri_type)
 {
   csi_report_pmi::two_antenna_port result;
   result.pmi = packed.extract(0, packed.size());
@@ -201,22 +229,16 @@ static csi_report_pmi csi_report_unpack_pmi_two_antenna_port(const csi_report_pa
   return csi_report_pmi{result};
 }
 
-/// Unpacks PMI for TypeI-SinglePort, four ports and mode 1.
-static csi_report_pmi csi_report_unpack_pmi_typeI_single_panel_4ports_mode1(const csi_report_packed& packed,
-                                                                            unsigned nof_csi_rs_antenna_ports,
-                                                                            csi_report_data::ri_type ri)
+static csi_report_pmi
+unpack_pmi(pmi_codebook_typeI_single_panel codebook, const csi_report_packed& packed, csi_report_data::ri_type ri)
 {
+  ocudu_assert(codebook.mode == pmi_codebook_typeI_mode::one, "Only mode 1 is currently supported.");
+
   unsigned                                        count = 0;
   csi_report_pmi::typeI_single_panel_4ports_mode1 result;
 
-  // Select values N1, N2, O1 and O2 from TS38.214 Table 5.2.2.2.1-2;
-  unsigned N1 = 2;
-  unsigned N2 = 1;
-  unsigned O1 = 4;
-  unsigned O2 = 1;
-
   csi_report_typeI_single_panel_pmi_sizes sizes =
-      csi_report_get_pmi_sizes_typeI_single_panel_mode1(N1, N2, O1, O2, nof_csi_rs_antenna_ports, ri);
+      csi_report_get_pmi_sizes_typeI_single_panel_mode1(get_single_panel_info(codebook.n1_n2), ri);
 
   result.i_1_1 = packed.extract(count, sizes.i_1_1);
   count += sizes.i_1_1;
@@ -241,20 +263,9 @@ static csi_report_pmi csi_report_unpack_pmi_typeI_single_panel_4ports_mode1(cons
 
 /// Unpacks PMI.
 csi_report_pmi
-ocudu::csi_report_unpack_pmi(const csi_report_packed& packed, pmi_codebook_type codebook, csi_report_data::ri_type ri)
+ocudu::csi_report_unpack_pmi(const csi_report_packed& packed, pmi_codebook_config codebook, csi_report_data::ri_type ri)
 {
-  unsigned nof_csi_rs_antenna_ports = csi_report_get_nof_csi_rs_antenna_ports(codebook);
-
-  switch (codebook) {
-    case pmi_codebook_type::two:
-      return csi_report_unpack_pmi_two_antenna_port(packed);
-    case pmi_codebook_type::typeI_single_panel_4ports_mode1:
-      return csi_report_unpack_pmi_typeI_single_panel_4ports_mode1(packed, nof_csi_rs_antenna_ports, ri);
-    case pmi_codebook_type::one:
-    case pmi_codebook_type::other:
-    default:
-      return {};
-  }
+  return std::visit([&packed, ri](const auto& item) { return unpack_pmi(item, packed, ri); }, codebook);
 }
 
 csi_report_data::ri_type ocudu::csi_report_unpack_ri(const csi_report_packed&   ri_packed,
