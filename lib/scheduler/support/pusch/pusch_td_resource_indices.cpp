@@ -123,13 +123,13 @@ public:
         continue;
       }
       const unsigned k2 = dl_min_k2_vec[sl_idx];
-      const auto&    td_res_idx_it =
-          std::find_if(pusch_td_alloc_list.begin(),
-                       pusch_td_alloc_list.end(),
-                       [k2](const pusch_time_domain_resource_allocation& td_res) { return td_res.k2 == k2; });
-      ocudu_assert(td_res_idx_it != pusch_td_alloc_list.end(), "Expected TD resource index not found");
-      pusch_td_resource_indices_per_slot[sl_idx] = {
-          static_cast<unsigned>(std::distance(pusch_td_alloc_list.begin(), td_res_idx_it))};
+
+      for (unsigned td_res_i = 0, sz = pusch_td_alloc_list.size(); td_res_i != sz; ++td_res_i) {
+        const auto& td_res = pusch_td_alloc_list[td_res_i];
+        if (td_res.k2 == k2) {
+          pusch_td_resource_indices_per_slot[sl_idx].emplace_back(td_res_i);
+        }
+      }
     }
 
     return pusch_td_resource_indices_per_slot;

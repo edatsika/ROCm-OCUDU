@@ -18,8 +18,8 @@ struct search_space_info;
 struct pusch_config_common;
 struct pusch_time_domain_resource_allocation;
 
-/// \brief Returns the list of all applicable PUSCH Time Domain resource indexes based on cell, UE configuration and
-/// nof. symbols in PUSCH slot for a PDCCH slot.
+/// \brief Returns the list of all applicable PUSCH Time Domain resource indexes for a given PDCCH slot, based on the
+/// cell or UE configuration, and on FDD/TDD configuration.
 /// \param[in] pdcch_slot Slot at which the PDCCH is supposed to be scheduled.
 /// \param[in] tdd_cfg_common TDD configuration, if present.
 /// \param[in] pusch_cfg_common PUSCH common configuration.
@@ -70,13 +70,12 @@ get_fairly_distributed_pusch_td_resource_indices(subcarrier_spacing             
 /// In case of FDD, the list returned contains applicable PUSCH Time Domain resource indexes for only one slot.
 ///
 /// In case of DL heavy TDD pattern, the list (i) contains at most 1 index per DL slot; (ii) the resulting k2 values are
-/// such that DL_idx_n + k2(DL_idx_n) < DL_idx_m + k2(DL_idx_m) for any DL_idx_m < DL_idx_m (where the inequality has to
+/// such that DL_idx_n + k2(DL_idx_n) < DL_idx_m + k2(DL_idx_m) for any DL_idx_n < DL_idx_m (where the inequality has to
 /// be considered in the mod(x , TDD_period) context); (iii) k2 >= min_k2; (iv) every UL slot has a DL slot that maps
 /// to it.
 ///
 /// In case of UL heavy TDD pattern, this function ensures that UL PDCCH scheduling the PUSCH are fairly
-/// distributed across DL slots in a TDD configuration. In all other scenarios (FDD or DL heavy TDD pattern), the
-/// function behaves similar to \c get_pusch_td_resource_indices_per_slot().
+/// distributed across DL slots in a TDD configuration.
 ///
 /// \param[in] scs SCS common value.
 /// \param[in] tdd_cfg_common TDD configuration, if present.
