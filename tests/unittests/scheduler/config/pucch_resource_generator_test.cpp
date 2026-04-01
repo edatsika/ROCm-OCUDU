@@ -14,6 +14,7 @@
 #include "ocudu/scheduler/config/ran_cell_config_helper.h"
 #include "ocudu/scheduler/config/serving_cell_config_builder.h"
 #include "ocudu/scheduler/config/ue_bwp_config.h"
+#include "fmt/format.h"
 #include <gtest/gtest.h>
 #include <limits>
 
@@ -46,26 +47,53 @@ protected:
   const bwp_configuration             bwp_cfg;
 };
 
+TEST_P(pucch_resource_generator_test, generated_resources_are_consistent_with_parameters)
+{
+  std::vector<pucch_resource> res_list = config_helpers::generate_cell_pucch_res_list(params, bwp_cfg.crbs.length());
+  const unsigned              nof_res_f0_f1 =
+      params.nof_cell_sr_resources + params.nof_cell_res_set_configs * params.res_set_0_size.value();
+  const unsigned nof_res_f2_f3_f4 =
+      params.nof_cell_csi_resources + params.nof_cell_res_set_configs * params.res_set_1_size.value();
+  if (params.format_01() == pucch_format::FORMAT_0 and params.format_234() == pucch_format::FORMAT_2) {
+    ASSERT_EQ(nof_res_f0_f1 + nof_res_f2_f3_f4 + params.nof_cell_sr_resources + params.nof_cell_csi_resources,
+              res_list.size());
+  } else {
+    ASSERT_EQ(nof_res_f0_f1 + nof_res_f2_f3_f4, res_list.size());
+  }
+
+  for (const auto& res : span<const pucch_resource>(res_list.data(), nof_res_f0_f1 + nof_res_f2_f3_f4)) {
+    if (res.format == params.format_01()) {
+      ASSERT_EQ(params.nof_syms_01(), res.nof_symbols);
+      ASSERT_EQ(params.intraslot_freq_hopping_01(), res.second_hop_prb.has_value());
+    } else if (res.format == params.format_234()) {
+      ASSERT_EQ(params.nof_syms_234(), res.nof_symbols);
+      ASSERT_EQ(params.intraslot_freq_hopping_234(), res.second_hop_prb.has_value());
+    } else {
+      FAIL() << "Unexpected PUCCH format in generated resource list.";
+    }
+  }
+}
+
 TEST_P(pucch_resource_generator_test, successful_generation_results_in_no_collisions)
 {
   std::vector<pucch_resource> res_list = config_helpers::generate_cell_pucch_res_list(params, bwp_cfg.crbs.length());
   ASSERT_FALSE(res_list.empty());
 
-  const unsigned nof_res_f0_f1 =
-      params.nof_cell_sr_resources + params.nof_cell_res_set_configs * params.res_set_0_size.value();
-  const unsigned nof_res_f2_f3_f4 =
-      params.nof_cell_csi_resources + params.nof_cell_res_set_configs * params.res_set_1_size.value();
-  ASSERT_EQ(nof_res_f0_f1 + nof_res_f2_f3_f4, res_list.size());
-
-  // Generated resources should not collide with each other.
-  // TODO: handle F0+F2 case.
   std::vector<pucch_collision_info> collision_infos;
   collision_infos.reserve(res_list.size());
   for (const auto& res : res_list) {
     collision_infos.emplace_back(res, bwp_cfg);
   }
-  for (unsigned i = 0; i != collision_infos.size(); ++i) {
-    for (unsigned j = i + 1; j != collision_infos.size(); ++j) {
+
+  // Not all resources are checked for the F0+F2 case, since the extra resources there (SR_F0 and CSI_F2) are generated
+  // so that they collide with their respective SR/CSI resources.
+  const unsigned nof_res_f0_f1 =
+      params.nof_cell_sr_resources + params.nof_cell_res_set_configs * params.res_set_0_size.value();
+  const unsigned nof_res_f2_f3_f4 =
+      params.nof_cell_csi_resources + params.nof_cell_res_set_configs * params.res_set_1_size.value();
+  collision_infos.reserve(nof_res_f0_f1 + nof_res_f2_f3_f4);
+  for (unsigned i = 0; i != nof_res_f0_f1 + nof_res_f2_f3_f4; ++i) {
+    for (unsigned j = i + 1; j != nof_res_f0_f1 + nof_res_f2_f3_f4; ++j) {
       ASSERT_FALSE(collision_infos[i].collides(collision_infos[j]));
     }
   }
@@ -74,6 +102,7 @@ TEST_P(pucch_resource_generator_test, successful_generation_results_in_no_collis
 TEST_P(pucch_resource_generator_test, ue_pucch_config_builder_test)
 {
   const auto cell_res_list = config_helpers::generate_cell_pucch_res_list(params, bwp_cfg.crbs.length());
+  const bool using_02 = params.format_01() == pucch_format::FORMAT_0 and params.format_234() == pucch_format::FORMAT_2;
 
   for (auto res_set_cfg_id     = pucch_resource_set_config_id(0),
             res_set_cfg_id_end = pucch_resource_set_config_id(params.nof_cell_res_set_configs);
@@ -97,46 +126,42 @@ TEST_P(pucch_resource_generator_test, ue_pucch_config_builder_test)
         const auto pucch_cfg = config_helpers::build_pucch_config(cell_cfg, make_cell_bwp_config(cell_cfg), ue_bwp_cfg);
 
         static constexpr unsigned nof_sr_res_per_ue  = 1;
-        static constexpr unsigned nof_csi_res_per_ue = 1;
+        const unsigned            nof_csi_res_per_ue = params.nof_cell_csi_resources != 0 ? 1 : 0;
         // For F0+F2 case:
-        // - Two extra resources are added to the UE resource list (CSI_F0 and SR_F2).
-        // - Two extra resources are added to Resource Set ID 0 (CSI_F0 and SR_F0).
-        // - Two extra resources are added to Resource Set ID 1 (CSI_F2 and SR_F2).
-        const unsigned extra_res_in_res_list =
-            params.format_01() == pucch_format::FORMAT_0 and params.format_234() == pucch_format::FORMAT_2 ? 2 : 0;
-        const unsigned extra_res_per_res_set =
-            params.format_01() == pucch_format::FORMAT_0 and params.format_234() == pucch_format::FORMAT_2 ? 2 : 0;
+        // - Extra resources are added to the UE resource list (SR_F2 and optionally CSI_F0).
+        // - Extra resources are added to Resource Set ID 0 (SR_F0 and optionally CSI_F0).
+        // - Extra resources are added to Resource Set ID 1 (SR_F2 and optionally CSI_F2).
+        const unsigned extra_res_in_res_list = using_02 ? nof_sr_res_per_ue + nof_csi_res_per_ue : 0;
+        const unsigned extra_res_per_res_set = using_02 ? nof_sr_res_per_ue + nof_csi_res_per_ue : 0;
 
         ASSERT_EQ(params.res_set_0_size.value() + nof_sr_res_per_ue + params.res_set_1_size.value() +
                       nof_csi_res_per_ue + extra_res_in_res_list,
                   pucch_cfg.pucch_res_list.size());
 
+        auto are_cell_and_ue_resources_equal = [&cell_res_list, &pucch_cfg](const pucch_res_id_t& res_id) {
+          return cell_res_list[res_id.cell_res_id] == pucch_cfg.pucch_res_list[res_id.ue_res_id];
+        };
+
         // Check the SR resource.
         const pucch_res_id_t expected_sr_res_id{params.get_sr_cell_res_idx(sr_res_id), params.get_sr_ue_res_idx()};
-
         ASSERT_EQ(1U, pucch_cfg.sr_res_list.size());
         ASSERT_EQ(pucch_cfg.sr_res_list.front().pucch_res_id, expected_sr_res_id);
+        ASSERT_TRUE(are_cell_and_ue_resources_equal(expected_sr_res_id));
 
-        const pucch_resource& sr_res = pucch_cfg.pucch_res_list[expected_sr_res_id.ue_res_id];
-        ASSERT_EQ(params.format_01(), sr_res.format);
-        ASSERT_EQ(expected_sr_res_id, sr_res.res_id);
-
-        // Check the CSI resource.
-        const pucch_res_id_t expected_csi_res_id{params.get_csi_cell_res_idx(csi_res_id), params.get_csi_ue_res_idx()};
-
+        // Check the CSI resource (if configured).
         const auto csi_meas_cfg =
             config_helpers::build_csi_meas_config(cell_cfg, make_cell_bwp_config(cell_cfg), ue_bwp_cfg);
-
-        ASSERT_TRUE(csi_meas_cfg.has_value());
-        ASSERT_EQ(1U, csi_meas_cfg->csi_report_cfg_list.size());
-        const auto& periodic_report_cfg = std::get<csi_report_config::periodic_or_semi_persistent_report_on_pucch>(
-            csi_meas_cfg->csi_report_cfg_list.front().report_cfg_type);
-        ASSERT_EQ(1U, periodic_report_cfg.pucch_csi_res_list.size());
-        ASSERT_EQ(expected_csi_res_id, periodic_report_cfg.pucch_csi_res_list.front().pucch_res_id);
-
-        const pucch_resource& csi_res = pucch_cfg.pucch_res_list[expected_csi_res_id.ue_res_id];
-        ASSERT_EQ(params.format_234(), csi_res.format);
-        ASSERT_EQ(expected_csi_res_id, csi_res.res_id);
+        ASSERT_EQ(params.nof_cell_csi_resources != 0, csi_meas_cfg.has_value());
+        if (params.nof_cell_csi_resources != 0) {
+          const pucch_res_id_t expected_csi_res_id{params.get_csi_cell_res_idx(csi_res_id),
+                                                   params.get_csi_ue_res_idx()};
+          ASSERT_EQ(1U, csi_meas_cfg->csi_report_cfg_list.size());
+          const auto& periodic_report_cfg = std::get<csi_report_config::periodic_or_semi_persistent_report_on_pucch>(
+              csi_meas_cfg->csi_report_cfg_list.front().report_cfg_type);
+          ASSERT_EQ(1U, periodic_report_cfg.pucch_csi_res_list.size());
+          ASSERT_EQ(expected_csi_res_id, periodic_report_cfg.pucch_csi_res_list.front().pucch_res_id);
+          ASSERT_TRUE(are_cell_and_ue_resources_equal(expected_csi_res_id));
+        }
 
         // Check Resource Set ID 0.
         const auto& res_set_0 = pucch_cfg.pucch_res_set[0];
@@ -146,59 +171,41 @@ TEST_P(pucch_resource_generator_test, ue_pucch_config_builder_test)
         for (unsigned pri = 0; pri != params.res_set_0_size.value(); ++pri) {
           const pucch_res_id_t expected_res_id{params.get_res_set_cell_res_idx<0>(res_set_cfg_id, pri),
                                                params.get_res_set_ue_res_idx<0>(pri)};
-
           ASSERT_EQ(expected_res_id, res_set_0.pucch_res_id_list[pri]);
-
-          const pucch_resource& res = pucch_cfg.pucch_res_list[expected_res_id.ue_res_id];
-          ASSERT_EQ(params.format_01(), res.format);
-          ASSERT_EQ(expected_res_id, res.res_id);
-        }
-
-        if (extra_res_per_res_set) {
-          // Check CSI_F0 and SR_F0.
-          const pucch_res_id_t expected_id_csi_f0{std::numeric_limits<unsigned>::max(), params.res_set_0_size.value()};
-          ASSERT_EQ(expected_id_csi_f0, res_set_0.pucch_res_id_list[params.res_set_0_size.value()]);
-          ASSERT_EQ(expected_sr_res_id, res_set_0.pucch_res_id_list[params.res_set_0_size.value() + 1]);
+          ASSERT_TRUE(are_cell_and_ue_resources_equal(expected_res_id));
         }
 
         // Check Resource Set ID 1.
         const auto& res_set_1 = pucch_cfg.pucch_res_set[1];
         ASSERT_EQ(pucch_res_set_idx::set_1, res_set_1.pucch_res_set_id);
-        ASSERT_EQ(params.res_set_0_size.value() + extra_res_per_res_set, res_set_1.pucch_res_id_list.size());
+        ASSERT_EQ(params.res_set_1_size.value() + extra_res_per_res_set, res_set_1.pucch_res_id_list.size());
 
         for (unsigned pri = 0; pri != params.res_set_1_size.value(); ++pri) {
           const pucch_res_id_t expected_res_id{params.get_res_set_cell_res_idx<1>(res_set_cfg_id, pri),
                                                params.get_res_set_ue_res_idx<1>(pri)};
           ASSERT_EQ(expected_res_id, res_set_1.pucch_res_id_list[pri]);
-
-          const pucch_resource& res = pucch_cfg.pucch_res_list[expected_res_id.ue_res_id];
-          ASSERT_EQ(params.format_234(), res.format);
-          ASSERT_EQ(expected_res_id, res.res_id);
+          ASSERT_TRUE(are_cell_and_ue_resources_equal(expected_res_id));
         }
 
-        if (extra_res_per_res_set) {
-          // Check CSI_F2 and SR_F2.
-          ASSERT_EQ(expected_csi_res_id, res_set_1.pucch_res_id_list[params.res_set_0_size.value()]);
-          const pucch_res_id_t expected_id_sr_f2{std::numeric_limits<unsigned>::max(),
-                                                 static_cast<unsigned>(pucch_cfg.pucch_res_list.size()) - 1};
-          ASSERT_EQ(expected_id_sr_f2, res_set_1.pucch_res_id_list[params.res_set_0_size.value() + 1]);
-        }
+        if (using_02) {
+          // Check SR_F0 and SR_F2.
+          ASSERT_EQ(expected_sr_res_id, res_set_0.pucch_res_id_list[params.res_set_0_size.value()]);
+          const pucch_res_id_t expected_id_sr_f2{params.get_sr_f2_cell_res_idx(sr_res_id),
+                                                 params.get_sr_f2_ue_res_idx()};
+          ASSERT_EQ(expected_id_sr_f2, res_set_1.pucch_res_id_list[params.res_set_1_size.value()]);
+          ASSERT_TRUE(are_cell_and_ue_resources_equal(expected_id_sr_f2));
 
-        // Check that all UE resources are equal to their corresponding cell resources.
-        for (const auto& ue_res : pucch_cfg.pucch_res_list) {
-          if (ue_res.res_id.cell_res_id == std::numeric_limits<unsigned>::max()) {
-            // Skip dummy resources (CSI_F0 and SR_F2).
-            continue;
+          if (params.nof_cell_csi_resources != 0) {
+            // Check CSI_F0 and CSI_F2.
+            const pucch_res_id_t expected_id_csi_f0{params.get_csi_f0_cell_res_idx(csi_res_id),
+                                                    params.get_csi_f0_ue_res_idx()};
+            ASSERT_EQ(expected_id_csi_f0, res_set_0.pucch_res_id_list[params.res_set_0_size.value() + 1U]);
+            ASSERT_TRUE(are_cell_and_ue_resources_equal(expected_id_csi_f0));
+
+            const pucch_res_id_t expected_csi_res_id{params.get_csi_cell_res_idx(csi_res_id),
+                                                     params.get_csi_ue_res_idx()};
+            ASSERT_EQ(expected_csi_res_id, res_set_1.pucch_res_id_list[params.res_set_1_size.value() + 1U]);
           }
-          const auto& cell_res = cell_res_list[ue_res.res_id.cell_res_id];
-
-          // Everything must be equal, except for the resource ID.
-          ASSERT_EQ(cell_res.starting_prb, ue_res.starting_prb);
-          ASSERT_EQ(cell_res.second_hop_prb, ue_res.second_hop_prb);
-          ASSERT_EQ(cell_res.nof_symbols, ue_res.nof_symbols);
-          ASSERT_EQ(cell_res.starting_sym_idx, ue_res.starting_sym_idx);
-          ASSERT_EQ(cell_res.format, ue_res.format);
-          ASSERT_EQ(cell_res.format_params, ue_res.format_params);
         }
       }
     }
@@ -240,6 +247,64 @@ static constexpr pucch_f4_params f4_low_density{.nof_syms = 7, .intraslot_freq_h
 static constexpr pucch_f4_params f4_high_density{.nof_syms      = pucch_constants::f3::MIN_NOF_SYMS,
                                                  .occ_supported = true,
                                                  .occ_length    = pucch_f4_occ_len::n4};
+
+namespace ocudu {
+
+void PrintTo(const pucch_resource_builder_params& value, ::std::ostream* os)
+{
+  if (std::holds_alternative<pucch_f0_params>(value.f0_or_f1_params)) {
+    const auto& f0_params = std::get<pucch_f0_params>(value.f0_or_f1_params);
+    if (f0_params == f0_max_density) {
+      *os << "F0 (max density)";
+    } else if (f0_params == f0_freq_hop) {
+      *os << "F0 (freq hop)";
+    } else {
+      *os << "F0 (unknown)";
+    }
+  } else {
+    const auto& f1_params = std::get<pucch_f1_params>(value.f0_or_f1_params);
+    if (f1_params == f1_low_density) {
+      *os << "F1 (low density)";
+    } else if (f1_params == f1_high_density) {
+      *os << "F1 (high density)";
+    } else {
+      *os << "F1 (unknown)";
+    }
+  }
+
+  *os << " + ";
+
+  if (std::holds_alternative<pucch_f2_params>(value.f2_or_f3_or_f4_params)) {
+    const auto& f2_params = std::get<pucch_f2_params>(value.f2_or_f3_or_f4_params);
+    if (f2_params == f2_multiple_rbs) {
+      *os << "F2 (multiple RBs)";
+    } else if (f2_params == f2_freq_hop) {
+      *os << "F2 (freq hop)";
+    } else {
+      *os << "F2 (unknown)";
+    }
+  } else if (std::holds_alternative<pucch_f3_params>(value.f2_or_f3_or_f4_params)) {
+    const auto& f3_params = std::get<pucch_f3_params>(value.f2_or_f3_or_f4_params);
+    if (f3_params == f3_low_density) {
+      *os << "F3 (low density)";
+    } else if (f3_params == f3_high_density) {
+      *os << "F3 (high density)";
+    } else {
+      *os << "F3 (unknown)";
+    }
+  } else {
+    const auto& f4_params = std::get<pucch_f4_params>(value.f2_or_f3_or_f4_params);
+    if (f4_params == f4_low_density) {
+      *os << "F4 (low density)";
+    } else if (f4_params == f4_high_density) {
+      *os << "F4 (high density)";
+    } else {
+      *os << "F4 (unknown)";
+    }
+  }
+}
+
+} // namespace ocudu
 
 // The test cases are designed with the following considerations:
 // - Test different combinations of PUCCH Formats and parameters.
