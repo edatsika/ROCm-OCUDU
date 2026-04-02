@@ -248,6 +248,8 @@ pusch_index_list ocudu::get_pusch_td_resource_indices(slot_point                
       continue;
     }
 
+    // NOTE: the condition pusch_td_res.k2 <= min_k1 is used for the fallback scheduler, to prevent an allocation of a
+    // PUSCH before a PUCCH for the same UE on the same slot.
     if (is_dl_heavy and pusch_td_res.k2 <= min_k1) {
       // DL-heavy case.
       // [Implementation-defined] For DL heavy TDD configuration, in the PUSCH time domain resources list, we allow only
@@ -273,15 +275,13 @@ pusch_index_list ocudu::get_pusch_td_resource_indices(slot_point                
   return result;
 }
 
-std::vector<pusch_index_list>
-ocudu::get_pusch_td_res_idx_per_slot_full_list(subcarrier_spacing             scs,
-                                               const tdd_ul_dl_config_common& tdd_cfg_common,
-                                               const pusch_config_common&     pusch_cfg_common,
-                                               span<const uint8_t>            dl_data_to_ul_ack,
-                                               const search_space_info*       ss_info)
+static std::vector<pusch_index_list>
+get_pusch_td_res_idx_per_slot_full_list(subcarrier_spacing             scs,
+                                        const tdd_ul_dl_config_common& tdd_cfg_common,
+                                        const pusch_config_common&     pusch_cfg_common,
+                                        span<const uint8_t>            dl_data_to_ul_ack,
+                                        const search_space_info*       ss_info)
 {
-  // NOTE: [Implementation-defined] In case of FDD, we consider only one slot as all slots are similar unlike in TDD
-  // where there can be DL/UL full or partial slots.
   const unsigned nof_slots = nof_slots_per_tdd_period(tdd_cfg_common);
 
   // List circularly indexed by slot with the list of applicable PUSCH Time Domain resource indexes per slot.
