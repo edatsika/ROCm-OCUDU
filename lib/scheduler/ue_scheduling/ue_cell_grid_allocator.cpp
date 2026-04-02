@@ -4,8 +4,11 @@
 
 #include "ue_cell_grid_allocator.h"
 #include "../support/dci_builder.h"
+#include "../support/pucch/pucch_k1_helper.h"
 #include "../ue_context/ue_drx_controller.h"
 #include "grant_params_selector.h"
+#include "ocudu/adt/static_vector.h"
+#include "ocudu/scheduler/config/pusch_td_resource_indices.h"
 #include "ocudu/scheduler/result/dci_info.h"
 #include "ocudu/support/error_handling.h"
 
@@ -28,6 +31,52 @@ ue_cell_grid_allocator::ue_cell_grid_allocator(const scheduler_ue_expert_config&
 {
   dl_grants.reserve(MAX_UE_PDUS_PER_SLOT);
   ul_grants.reserve(MAX_PUSCH_PDUS_PER_SLOT);
+
+  const auto pusch_list =
+      get_pusch_td_resource_indices_per_slot(cell_alloc.cfg.scs_common(),
+                                             cell_alloc.cfg.params.tdd_cfg,
+                                             cell_alloc.cfg.params.ul_cfg_common.init_ul_bwp.pusch_cfg_common.value(),
+                                             cell_alloc.cfg.dl_data_to_ul_ack);
+  k1s_per_dl_slot = get_pucch_k1_list_per_slot(
+      cell_alloc.cfg.dl_data_to_ul_ack,
+      cell_alloc.cfg.params.tdd_cfg,
+      cell_alloc.cfg.params.ul_cfg_common.init_ul_bwp.pusch_cfg_common.value().pusch_td_alloc_list,
+      pusch_list);
+  static constexpr std::array<uint8_t, 5> f1_0_k1_list = {4, 5, 6, 7, 8};
+  k1s_per_dl_slot_dci_1_0                              = get_pucch_k1_list_per_slot(
+      f1_0_k1_list,
+      cell_alloc.cfg.params.tdd_cfg,
+      cell_alloc.cfg.params.ul_cfg_common.init_ul_bwp.pusch_cfg_common.value().pusch_td_alloc_list,
+      pusch_list);
+
+  if (cell_alloc.cfg.params.tdd_cfg.has_value()) {
+    fmt::print("\n List of TDD entries per DL slot\n");
+    for (unsigned dl_idx = 0, sz = pusch_list.size(); dl_idx != sz; ++dl_idx) {
+      if (not has_active_tdd_dl_symbols(cell_alloc.cfg.params.tdd_cfg.value(), dl_idx)) {
+        continue;
+      }
+      const auto& dl_vec = pusch_list[dl_idx];
+      fmt::print("DL idx={} k2_list=[ \t", dl_idx);
+      for (unsigned ul_td_idx : dl_vec) {
+        fmt::print(
+            "{}\t",
+            cell_alloc.cfg.params.ul_cfg_common.init_ul_bwp.pusch_cfg_common.value().pusch_td_alloc_list[ul_td_idx].k2);
+      }
+      fmt::print("]\n", dl_idx);
+    }
+
+    for (unsigned dl_idx = 0, sz = k1s_per_dl_slot.size(); dl_idx != sz; ++dl_idx) {
+      if (not has_active_tdd_dl_symbols(cell_alloc.cfg.params.tdd_cfg.value(), dl_idx)) {
+        continue;
+      }
+      const auto& dl_vec = k1s_per_dl_slot[dl_idx];
+      fmt::print("DL idx={} k1_list=[ \t", dl_idx);
+      for (unsigned ul_td_idx : dl_vec) {
+        fmt::print("{}\t", ul_td_idx);
+      }
+      fmt::print("]\n", dl_idx);
+    }
+  }
 }
 
 std::optional<sch_mcs_tbs>
@@ -103,12 +152,17 @@ ue_cell_grid_allocator::alloc_dl_pdcch(const ue_cell& ue_cc, const search_space_
 
 std::optional<uci_allocation> ue_cell_grid_allocator::alloc_uci(const ue_cell&           ue_cc,
                                                                 const search_space_info& ss_info,
-                                                                uint8_t                  pdsch_td_res_index) const
+                                                                uint8_t                  pdsch_td_res_index,
+                                                                slot_point               pdsch_slot) const
 {
   const pdsch_time_domain_resource_allocation& pdsch_td_cfg = ss_info.pdsch_time_domain_list[pdsch_td_res_index];
 
   // Allocate UCI. UCI destination (i.e., PUCCH or PUSCH) depends on whether there exist a PUSCH grant for the UE.
-  span<const uint8_t>           k1_list = ss_info.get_k1_candidates();
+  const unsigned      k1_list_idx = pdsch_slot.count() % k1s_per_dl_slot.size();
+  span<const uint8_t> k1_list     = ss_info.get_dl_dci_format() == dci_dl_format::f1_0
+                                        ? k1s_per_dl_slot_dci_1_0[k1_list_idx]
+                                        : k1s_per_dl_slot[k1_list_idx];
+
   std::optional<uci_allocation> uci =
       uci_alloc.alloc_harq_ack(cell_alloc, ue_cc.rnti(), ue_cc.cfg(), pdsch_td_cfg.k0, k1_list);
   if (not uci.has_value()) {
@@ -183,7 +237,9 @@ ue_cell_grid_allocator::setup_dl_grant_builder(const slice_ue&                  
 
   if (not dl_harq_feedback_disabled or user.ran_slice_id() == SRB_RAN_SLICE_ID) {
     // Allocate UCI.
-    uci_result = alloc_uci(ue_cc, ss_info, pdsch_td_res_index);
+    // For TDD DL-heavy only: some DL slots have k2 values larger than min k2. Pass it to the UCI allocator so that it
+    // can choose k1 >= DL slot k2.
+    uci_result = alloc_uci(ue_cc, ss_info, pdsch_td_res_index, pdsch_alloc.slot);
     if (not uci_result.has_value()) {
       ++pdcch_alloc.result.failed_attempts.uci;
       pdcch_sched.cancel_last_pdcch(pdcch_alloc);

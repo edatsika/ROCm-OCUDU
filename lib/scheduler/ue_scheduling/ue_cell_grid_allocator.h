@@ -242,8 +242,10 @@ private:
   expected<pdcch_dl_information*, alloc_status> alloc_dl_pdcch(const ue_cell&           ue_cc,
                                                                const search_space_info& ss_info) const;
 
-  std::optional<uci_allocation>
-  alloc_uci(const ue_cell& ue_cc, const search_space_info& ss_info, uint8_t pdsch_td_res_index) const;
+  std::optional<uci_allocation> alloc_uci(const ue_cell&           ue_cc,
+                                          const search_space_info& ss_info,
+                                          uint8_t                  pdsch_td_res_index,
+                                          slot_point               pdsch_slot) const;
 
   // Save the PUCCH power control results for the given slot.
   void post_process_pucch_pw_ctrl_results(slot_point slot) const;
@@ -258,6 +260,9 @@ private:
 
   std::vector<dl_grant_info> dl_grants;
   std::vector<ul_grant_info> ul_grants;
+
+  std::vector<static_vector<uint8_t, 8>> k1s_per_dl_slot;
+  std::vector<static_vector<uint8_t, 8>> k1s_per_dl_slot_dci_1_0;
 };
 
 } // namespace ocudu
