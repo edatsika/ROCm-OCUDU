@@ -85,7 +85,17 @@ async_task<ue_index_t> f1ap_cu_impl::handle_ue_context_release_command(const f1a
     });
   }
 
-  return launch_async<ue_context_release_procedure>(cfg, msg, ue_ctxt_list[msg.ue_index], tx_pdu_notifier);
+  return launch_async(
+      [this, msg, resp = gnb_cu_ue_f1ap_id_t::invalid](coro_context<async_task<ue_index_t>>& ctx) mutable {
+        CORO_BEGIN(ctx);
+        CORO_AWAIT_VALUE(
+            resp, launch_async<ue_context_release_procedure>(cfg, msg, ue_ctxt_list[msg.ue_index], tx_pdu_notifier));
+        if (resp == gnb_cu_ue_f1ap_id_t::invalid) {
+          CORO_EARLY_RETURN(ue_index_t::invalid);
+        }
+
+        CORO_RETURN(msg.ue_index);
+      });
 }
 
 async_task<f1ap_ue_context_modification_response>
@@ -357,20 +367,54 @@ void f1ap_cu_impl::handle_initial_ul_rrc_message(const asn1::f1ap::init_ul_rrc_m
 
   // Reject the UE if the creation was not successful.
   if (not resp.has_value()) {
-    asn1::f1ap::dl_rrc_msg_transfer_s dl_rrc_msg = {};
-    dl_rrc_msg->gnb_cu_ue_f1ap_id                = gnb_cu_ue_f1ap_id_to_uint(cu_ue_f1ap_id);
-    dl_rrc_msg->gnb_du_ue_f1ap_id                = gnb_du_ue_f1ap_id_to_uint(du_ue_id);
-    dl_rrc_msg->srb_id                           = srb_id_to_uint(srb_id_t::srb0);
-    dl_rrc_msg->rrc_container                    = resp.error().copy();
+    // Create UE context.
+    // Note: The context will be removed after the UE context release procedure has completed.
+    ue_ctxt_list.add_ue(cu_ue_f1ap_id, std::nullopt);
+    ue_ctxt_list.add_du_ue_f1ap_id(cu_ue_f1ap_id, du_ue_id);
 
-    // Pack message into PDU.
-    f1ap_message f1ap_dl_rrc_msg;
-    f1ap_dl_rrc_msg.pdu.set_init_msg();
-    f1ap_dl_rrc_msg.pdu.init_msg().load_info_obj(ASN1_F1AP_ID_DL_RRC_MSG_TRANSFER);
-    f1ap_dl_rrc_msg.pdu.init_msg().value.dl_rrc_msg_transfer() = std::move(dl_rrc_msg);
+    f1ap_ue_context_release_command ue_context_release_cmd;
+    ue_context_release_cmd.cause   = f1ap_cause_radio_network_t::no_radio_res_available;
+    ue_context_release_cmd.rrc_pdu = resp.error().copy();
+    ue_context_release_cmd.srb_id  = srb_id_t::srb0;
 
-    // Send DL RRC message.
-    tx_pdu_notifier.on_new_message(f1ap_dl_rrc_msg);
+    // Schedule UE context release on UE task scheduler.
+    std::map<gnb_cu_ue_f1ap_id_t, eager_async_task<gnb_cu_ue_f1ap_id_t>>& ue_release_tasks =
+        ue_ctxt_list.get_ue_release_tasks();
+    if (ue_release_tasks.find(cu_ue_f1ap_id) != ue_release_tasks.end()) {
+      logger.warning("cu_ue={}: Dropping InitialULRRCMessageTransfer. A pending release task already exists",
+                     fmt::underlying(cu_ue_f1ap_id));
+      return;
+    }
+
+    ue_release_tasks.emplace(
+        cu_ue_f1ap_id,
+        launch_async(
+            [this,
+             cu_ue_f1ap_id,
+             ue_context_release_cmd = std::move(ue_context_release_cmd),
+             resp = gnb_cu_ue_f1ap_id_t::invalid](coro_context<eager_async_task<gnb_cu_ue_f1ap_id_t>>& ctx) mutable {
+              CORO_BEGIN(ctx);
+              CORO_AWAIT_VALUE(resp,
+                               launch_async<ue_context_release_procedure>(
+                                   cfg, ue_context_release_cmd, ue_ctxt_list[cu_ue_f1ap_id], tx_pdu_notifier));
+              CORO_RETURN(resp);
+            }));
+
+    // Schedule UE context removal.
+    du_processor_notifier.schedule_async_task(launch_async([this, cu_ue_f1ap_id](coro_context<async_task<void>>& ctx) {
+      CORO_BEGIN(ctx);
+
+      // UE context will only be removed after the UE release task has completed.
+      // Note: The UE context release will also remove the ue release task.
+      if (ue_ctxt_list.get_ue_release_tasks().find(cu_ue_f1ap_id) != ue_ctxt_list.get_ue_release_tasks().end() &&
+          !ue_ctxt_list.get_ue_release_tasks().at(cu_ue_f1ap_id).ready()) {
+        CORO_AWAIT(ue_ctxt_list.get_ue_release_tasks().at(cu_ue_f1ap_id));
+      }
+
+      ue_ctxt_list.remove_ue(cu_ue_f1ap_id);
+      CORO_RETURN();
+    }));
+
     return;
   }
 
@@ -385,7 +429,7 @@ void f1ap_cu_impl::handle_initial_ul_rrc_message(const asn1::f1ap::init_ul_rrc_m
     ue_ctxt.logger.log_info("Updated resumed UE context with new DU UE F1AP ID");
   } else {
     // Create UE context and store it.
-    f1ap_ue_context& ue_ctxt = ue_ctxt_list.add_ue(resp->ue_index, cu_ue_f1ap_id);
+    f1ap_ue_context& ue_ctxt = ue_ctxt_list.add_ue(cu_ue_f1ap_id, resp->ue_index);
     ue_ctxt_list.add_du_ue_f1ap_id(cu_ue_f1ap_id, du_ue_id);
     ue_ctxt_list.add_srb0_rrc_notifier(resp->ue_index, resp->f1ap_srb0_notifier);
     ue_ctxt_list.add_srb1_rrc_notifier(resp->ue_index, resp->f1ap_srb1_notifier);

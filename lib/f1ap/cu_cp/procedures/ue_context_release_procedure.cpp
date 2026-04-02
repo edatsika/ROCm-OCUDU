@@ -16,15 +16,18 @@ using namespace asn1::f1ap;
 ue_context_release_procedure::ue_context_release_procedure(const f1ap_configuration&              f1ap_cfg_,
                                                            const f1ap_ue_context_release_command& cmd_,
                                                            f1ap_ue_context&                       ue_ctxt_,
-                                                           f1ap_message_notifier&                 f1ap_notif_) :
-  f1ap_cfg(f1ap_cfg_), ue_ctxt(ue_ctxt_), f1ap_notifier(f1ap_notif_), logger(ocudulog::fetch_basic_logger("CU-CP-F1"))
+                                                           f1ap_message_notifier&                 f1ap_notifier_) :
+  f1ap_cfg(f1ap_cfg_),
+  ue_ctxt(ue_ctxt_),
+  f1ap_notifier(f1ap_notifier_),
+  logger(ocudulog::fetch_basic_logger("CU-CP-F1"))
 {
   command->gnb_cu_ue_f1ap_id = gnb_cu_ue_f1ap_id_to_uint(ue_ctxt.ue_ids.cu_ue_f1ap_id);
   command->gnb_du_ue_f1ap_id = gnb_du_ue_f1ap_id_to_uint(*ue_ctxt.ue_ids.du_ue_f1ap_id);
   command->cause             = cause_to_asn1(cmd_.cause);
-  if (!cmd_.rrc_release_pdu.empty()) {
+  if (!cmd_.rrc_pdu.empty()) {
     command->rrc_container_present = true;
-    command->rrc_container         = cmd_.rrc_release_pdu.copy();
+    command->rrc_container         = cmd_.rrc_pdu.copy();
 
     ocudu_assert(cmd_.srb_id.has_value(), "SRB-ID for UE Context Release Command with RRC Container must be set");
 
@@ -33,24 +36,24 @@ ue_context_release_procedure::ue_context_release_procedure(const f1ap_configurat
   }
 }
 
-void ue_context_release_procedure::operator()(coro_context<async_task<ue_index_t>>& ctx)
+void ue_context_release_procedure::operator()(coro_context<async_task<gnb_cu_ue_f1ap_id_t>>& ctx)
 {
   CORO_BEGIN(ctx);
 
   if (ue_ctxt.release_complete_event.is_set()) {
     // Already completed, return cached result immediately.
-    logger.debug("{}: Returning cached release result", f1ap_ue_log_prefix{ue_ctxt.ue_ids, name()});
+    ue_ctxt.logger.log_debug("\"{}\" Returning cached release result", name());
     CORO_EARLY_RETURN(ue_ctxt.release_complete_event.get());
   }
 
   if (ue_ctxt.marked_for_release) {
     // In progress, wait for completion.
-    logger.debug("{}: Waiting for existing release to complete", f1ap_ue_log_prefix{ue_ctxt.ue_ids, name()});
+    ue_ctxt.logger.log_debug("\"{}\" Waiting for existing release to complete", name());
     CORO_AWAIT_VALUE(release_result, ue_ctxt.release_complete_event);
     CORO_EARLY_RETURN(release_result);
   }
 
-  logger.debug("{}: Procedure started...", f1ap_ue_log_prefix{ue_ctxt.ue_ids, name()});
+  ue_ctxt.logger.log_debug("\"{}\" started...", name());
 
   ue_ctxt.marked_for_release = true;
 
@@ -59,7 +62,7 @@ void ue_context_release_procedure::operator()(coro_context<async_task<ue_index_t
   // Send command to DU.
   send_ue_context_release_command();
 
-  // Await CU response.
+  // Await DU response.
   CORO_AWAIT(transaction_sink);
 
   // Handle response from DU and return UE index
@@ -83,21 +86,23 @@ void ue_context_release_procedure::send_ue_context_release_command()
   f1ap_notifier.on_new_message(f1ap_ue_ctxt_rel_msg);
 }
 
-ue_index_t ue_context_release_procedure::create_ue_context_release_complete()
+gnb_cu_ue_f1ap_id_t ue_context_release_procedure::create_ue_context_release_complete()
 {
   if (transaction_sink.successful()) {
     gnb_du_ue_f1ap_id_t du_ue_id = int_to_gnb_du_ue_f1ap_id(transaction_sink.response()->gnb_du_ue_f1ap_id);
     if (!ue_ctxt.ue_ids.du_ue_f1ap_id || du_ue_id != *ue_ctxt.ue_ids.du_ue_f1ap_id) {
-      logger.error("{}: Procedure failed. Cause: gNB-DU-UE-F1AP-ID mismatch.",
-                   f1ap_ue_log_prefix{ue_ctxt.ue_ids, name()});
-      return ue_index_t::invalid;
+      ue_ctxt.logger.log_error("\"{}\": Procedure failed. Cause: gNB-DU-UE-F1AP-ID mismatch", name());
+      return gnb_cu_ue_f1ap_id_t::invalid;
     }
-    return ue_ctxt.ue_ids.ue_index;
+
+    ue_ctxt.logger.log_debug("\"{}\" finished successfully", name());
+
+    return ue_ctxt.ue_ids.cu_ue_f1ap_id;
   }
 
-  logger.warning("{}: Procedure failed. Cause: {}",
+  logger.warning("{}: failed. Cause: {}",
                  f1ap_ue_log_prefix{ue_ctxt.ue_ids, name()},
                  transaction_sink.timeout_expired() ? "Timeout" : "Transaction failed");
 
-  return ue_index_t::invalid;
+  return gnb_cu_ue_f1ap_id_t::invalid;
 }

@@ -61,7 +61,7 @@ TEST_F(f1ap_cu_ue_context_test, when_ue_added_then_ue_exists)
   ue_index_t          ue_index      = generate_random_ue_index();
   gnb_cu_ue_f1ap_id_t cu_ue_f1ap_id = generate_random_gnb_cu_ue_f1ap_id();
 
-  ue_ctxt_list.add_ue(ue_index, cu_ue_f1ap_id);
+  ue_ctxt_list.add_ue(cu_ue_f1ap_id, ue_index);
 
   ASSERT_TRUE(ue_ctxt_list.contains(cu_ue_f1ap_id));
   ASSERT_TRUE(ue_ctxt_list.contains(ue_index));
@@ -86,7 +86,7 @@ TEST_F(f1ap_cu_ue_context_test, when_ue_exists_then_removal_succeeds)
   ue_index_t          ue_index      = generate_random_ue_index();
   gnb_cu_ue_f1ap_id_t cu_ue_f1ap_id = generate_random_gnb_cu_ue_f1ap_id();
 
-  ue_ctxt_list.add_ue(ue_index, cu_ue_f1ap_id);
+  ue_ctxt_list.add_ue(cu_ue_f1ap_id, ue_index);
 
   // test removal
   ue_ctxt_list.remove_ue(ue_index);
@@ -102,7 +102,7 @@ TEST_F(f1ap_cu_ue_context_test, when_ue_is_added_then_next_ue_id_is_increased)
 
   ASSERT_EQ((unsigned)cu_ue_f1ap_id, (unsigned)gnb_cu_ue_f1ap_id_t::min);
 
-  ue_ctxt_list.add_ue(ue_index, cu_ue_f1ap_id);
+  ue_ctxt_list.add_ue(cu_ue_f1ap_id, ue_index);
 
   // remove ue
   ue_ctxt_list.remove_ue(ue_index);

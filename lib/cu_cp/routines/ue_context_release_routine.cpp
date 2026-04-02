@@ -60,8 +60,8 @@ void ue_context_release_routine::operator()(coro_context<async_task<cu_cp_ue_con
     f1ap_ue_context_release_cmd.ue_index = command.ue_index;
     f1ap_ue_context_release_cmd.cause    = ngap_to_f1ap_cause(command.cause);
     if (command.requires_rrc_release) {
-      f1ap_ue_context_release_cmd.rrc_release_pdu = release_context.rrc_release_pdu.copy();
-      f1ap_ue_context_release_cmd.srb_id          = release_context.srb_id;
+      f1ap_ue_context_release_cmd.rrc_pdu = release_context.rrc_release_pdu.copy();
+      f1ap_ue_context_release_cmd.srb_id  = release_context.srb_id;
     }
 
     CORO_AWAIT_VALUE(f1ap_ue_context_release_result,

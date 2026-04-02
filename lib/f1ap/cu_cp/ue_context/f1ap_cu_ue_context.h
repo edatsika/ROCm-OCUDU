@@ -7,28 +7,30 @@
 #include "f1ap_cu_ue_transaction_manager.h"
 #include "f1ap_ue_logger.h"
 #include "ue_ul_bearer_manager.h"
-#include "ocudu/f1ap/cu_cp/f1ap_cu.h"
+#include "ocudu/f1ap/cu_cp/f1ap_rrc_msg_transfer_handling.h"
 #include "ocudu/f1ap/f1ap_message_notifier.h"
 #include "ocudu/f1ap/f1ap_ue_id_types.h"
+#include "ocudu/support/async/eager_async_task.h"
 #include "ocudu/support/async/manual_event.h"
-#include <unordered_map>
+#include <map>
 
-namespace ocudu {
-namespace ocucp {
+namespace ocudu::ocucp {
 
 struct f1ap_ue_context {
   f1ap_ue_ids ue_ids;
   /// Whether the release procedure has been started for this UE context.
   bool marked_for_release = false;
   /// Event to notify all pending release callers when release completes. Stores the result.
-  manual_event<ue_index_t> release_complete_event;
+  manual_event<gnb_cu_ue_f1ap_id_t> release_complete_event;
   /// Whether the old gNB-DU UE F1AP UE ID IE needs to be notified back to the DU, due to reestablishment.
   std::optional<gnb_du_ue_f1ap_id_t> pending_old_ue_id;
   f1ap_ue_transaction_manager        ev_mng;
   f1ap_ue_logger                     logger;
 
   f1ap_ue_context(ue_index_t ue_index_, gnb_cu_ue_f1ap_id_t cu_ue_f1ap_id_, timer_factory timers_) :
-    ue_ids({ue_index_, cu_ue_f1ap_id_}), ev_mng(timers_), logger("CU-CP-F1", {ue_ids}, ": ")
+    ue_ids({.ue_index = ue_index_, .cu_ue_f1ap_id = cu_ue_f1ap_id_}),
+    ev_mng(timers_),
+    logger("CU-CP-F1", {ue_ids}, ": ")
   {
   }
 
@@ -118,15 +120,27 @@ public:
     return it != ue_index_to_ue_f1ap_id.end() ? &ues.at(it->second) : nullptr;
   }
 
-  f1ap_ue_context& add_ue(ue_index_t ue_index, gnb_cu_ue_f1ap_id_t cu_ue_id)
+  f1ap_ue_context& add_ue(gnb_cu_ue_f1ap_id_t cu_ue_id, std::optional<ue_index_t> ue_index)
   {
-    ocudu_assert(ue_index != ue_index_t::invalid, "Invalid ue_index={}", fmt::underlying(ue_index));
     ocudu_assert(cu_ue_id != gnb_cu_ue_f1ap_id_t::invalid, "Invalid cu_ue={}", fmt::underlying(cu_ue_id));
 
-    logger.debug("ue={} cu_ue={}: Adding F1AP UE context", fmt::underlying(ue_index), fmt::underlying(cu_ue_id));
-    ues.emplace(
-        std::piecewise_construct, std::forward_as_tuple(cu_ue_id), std::forward_as_tuple(ue_index, cu_ue_id, timers));
-    ue_index_to_ue_f1ap_id.emplace(ue_index, cu_ue_id);
+    logger.debug("{}cu_ue={}: Adding F1AP UE context",
+                 ue_index.has_value() ? fmt::format("ue={} ", fmt::underlying(ue_index.value())) : "",
+                 fmt::underlying(cu_ue_id));
+
+    if (ue_index.has_value()) {
+      ocudu_assert(ue_index != ue_index_t::invalid, "Invalid ue_index={}", fmt::underlying(ue_index.value()));
+
+      ues.emplace(std::piecewise_construct,
+                  std::forward_as_tuple(cu_ue_id),
+                  std::forward_as_tuple(ue_index.value(), cu_ue_id, timers));
+      ue_index_to_ue_f1ap_id.emplace(ue_index.value(), cu_ue_id);
+    } else {
+      ues.emplace(std::piecewise_construct,
+                  std::forward_as_tuple(cu_ue_id),
+                  std::forward_as_tuple(ue_index_t::invalid, cu_ue_id, timers));
+    }
+
     return ues.at(cu_ue_id);
   }
 
@@ -156,12 +170,36 @@ public:
     gnb_cu_ue_f1ap_id_t cu_ue_id = ue_index_to_ue_f1ap_id.at(ue_index);
     ue_index_to_ue_f1ap_id.erase(ue_index);
 
+    remove_ue(cu_ue_id);
+  }
+
+  void remove_ue(gnb_cu_ue_f1ap_id_t cu_ue_id)
+  {
+    ocudu_assert(cu_ue_id != gnb_cu_ue_f1ap_id_t::invalid, "Invalid cu_ue={}", fmt::underlying(cu_ue_id));
+
     if (ues.find(cu_ue_id) == ues.end()) {
       logger.warning("cu_ue={}: F1AP UE context not found", fmt::underlying(cu_ue_id));
       return;
     }
 
-    logger.debug("ue={} cu_ue={}: Removing F1AP UE context", fmt::underlying(ue_index), fmt::underlying(cu_ue_id));
+    // Remove UE from lookup.
+    if (ues.at(cu_ue_id).ue_ids.ue_index != ue_index_t::invalid) {
+      ue_index_to_ue_f1ap_id.erase(ues.at(cu_ue_id).ue_ids.ue_index);
+    }
+
+    // Remove pending release task if it exists.
+    if (ue_release_tasks.find(cu_ue_id) != ue_release_tasks.end() && !ue_release_tasks.at(cu_ue_id).ready()) {
+      // Stop ongoing release procedure if it exists, and wait for completion.
+      ues.at(cu_ue_id).ev_mng.context_release_complete.stop();
+      ue_release_tasks.at(cu_ue_id).await_ready();
+      ue_release_tasks.erase(cu_ue_id);
+    }
+
+    logger.debug("{}cu_ue={}: Removing F1AP UE context",
+                 ues.at(cu_ue_id).ue_ids.ue_index == ue_index_t::invalid
+                     ? ""
+                     : fmt::format("ue={} ", fmt::underlying(ues.at(cu_ue_id).ue_ids.ue_index)),
+                 fmt::underlying(cu_ue_id));
     ues.erase(cu_ue_id);
   }
 
@@ -248,6 +286,11 @@ public:
     return gnb_cu_ue_f1ap_id_t::invalid;
   }
 
+  std::map<gnb_cu_ue_f1ap_id_t, eager_async_task<gnb_cu_ue_f1ap_id_t>>& get_ue_release_tasks()
+  {
+    return ue_release_tasks;
+  }
+
   std::unordered_map<gnb_cu_ue_f1ap_id_t, f1ap_ue_context>::iterator       begin() { return ues.begin(); }
   std::unordered_map<gnb_cu_ue_f1ap_id_t, f1ap_ue_context>::const_iterator begin() const { return ues.begin(); }
   std::unordered_map<gnb_cu_ue_f1ap_id_t, f1ap_ue_context>::iterator       end() { return ues.end(); }
@@ -274,7 +317,8 @@ private:
   // Note: Given that UEs will self-remove from the map, we don't want to destructor to clear the lookups beforehand.
   std::unordered_map<ue_index_t, gnb_cu_ue_f1ap_id_t>      ue_index_to_ue_f1ap_id; // indexed by ue_index
   std::unordered_map<gnb_cu_ue_f1ap_id_t, f1ap_ue_context> ues;                    // indexed by gnb_cu_ue_f1ap_id
+
+  std::map<gnb_cu_ue_f1ap_id_t, eager_async_task<gnb_cu_ue_f1ap_id_t>> ue_release_tasks;
 };
 
-} // namespace ocucp
-} // namespace ocudu
+} // namespace ocudu::ocucp

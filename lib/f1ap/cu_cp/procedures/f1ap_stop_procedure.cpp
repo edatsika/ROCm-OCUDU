@@ -4,6 +4,7 @@
 
 #include "f1ap_stop_procedure.h"
 #include "../ue_context/f1ap_cu_ue_context.h"
+#include "ocudu/f1ap/cu_cp/f1ap_cu.h"
 
 using namespace ocudu;
 using namespace ocucp;

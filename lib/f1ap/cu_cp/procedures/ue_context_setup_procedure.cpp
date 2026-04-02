@@ -100,7 +100,7 @@ bool ue_context_setup_procedure::find_or_create_f1ap_ue_context()
   }
 
   // Create F1AP UE context.
-  ue_ctxt = &ue_ctxt_list.add_ue(request.ue_index, tmp_cu_ue_f1ap_id);
+  ue_ctxt = &ue_ctxt_list.add_ue(tmp_cu_ue_f1ap_id, request.ue_index);
   logger.info("{}: UE successfully created.", f1ap_ue_log_prefix{ue_ctxt->ue_ids, name()});
 
   return true;
