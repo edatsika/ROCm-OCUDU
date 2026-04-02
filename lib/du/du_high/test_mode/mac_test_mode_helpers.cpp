@@ -3,6 +3,7 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "mac_test_mode_helpers.h"
+#include "ocudu/ran/csi_report/csi_report_on_puxch_utils.h"
 #include "ocudu/scheduler/result/pucch_info.h"
 #include "ocudu/scheduler/result/pusch_info.h"
 
@@ -79,17 +80,7 @@ static void fill_csi_bits(bounded_bitset<uci_constants::MAX_NOF_CSI_PART1_OR_PAR
 
 static unsigned get_nof_ports(const csi_report_configuration& csi_rep_cfg)
 {
-  switch (csi_rep_cfg.pmi_codebook) {
-    case pmi_codebook_type::one:
-      return 1;
-    case pmi_codebook_type::two:
-      return 2;
-    case pmi_codebook_type::typeI_single_panel_4ports_mode1:
-      return 4;
-    default:
-      report_fatal_error("Unsupported CSI report type");
-  }
-  return 1;
+  return csi_report_get_nof_csi_rs_antenna_ports(csi_rep_cfg.pmi_codebook);
 }
 
 static void fill_csi_bits(bounded_bitset<uci_constants::MAX_NOF_CSI_PART1_OR_PART2_BITS>& payload,

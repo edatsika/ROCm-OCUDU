@@ -7,7 +7,7 @@
 #include "ocudu/ran/csi_report/csi_report_configuration.h"
 #include "ocudu/ran/csi_report/csi_report_data.h"
 #include "ocudu/ran/csi_report/csi_report_packed.h"
-#include "ocudu/support/units.h"
+#include "ocudu/ran/precoding/precoding_codebook_configuration.h"
 
 namespace ocudu {
 
@@ -23,20 +23,20 @@ struct ri_li_cqi_cri_sizes {
 };
 
 /// Gets the RI, LI, wideband CQI, and CRI fields bit-width.
-ri_li_cqi_cri_sizes get_ri_li_cqi_cri_sizes(pmi_codebook_type        pmi_codebook,
+ri_li_cqi_cri_sizes get_ri_li_cqi_cri_sizes(pmi_codebook_config      pmi_codebook,
                                             ri_restriction_type      ri_restriction,
                                             csi_report_data::ri_type ri,
                                             unsigned                 nof_csi_rs_resources);
 
 /// Gets the PMI field bit-width.
-unsigned csi_report_get_size_pmi(pmi_codebook_type codebook, csi_report_data::ri_type ri);
+unsigned csi_report_get_size_pmi(pmi_codebook_config codebook, csi_report_data::ri_type ri);
 
 /// Unpacks wideband CQI.
 csi_report_data::wideband_cqi_type csi_report_unpack_wideband_cqi(csi_report_packed packed);
 
 /// Unpacks PMI.
 csi_report_pmi
-csi_report_unpack_pmi(const csi_report_packed& packed, pmi_codebook_type codebook, csi_report_data::ri_type ri);
+csi_report_unpack_pmi(const csi_report_packed& packed, pmi_codebook_config codebook, csi_report_data::ri_type ri);
 
 /// Unpacks RI as per TS38.212 Section 6.3.1.1.2. and TS38.214 Section 5.2.2.2.1.
 csi_report_data::ri_type csi_report_unpack_ri(const csi_report_packed&   ri_packed,
