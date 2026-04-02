@@ -47,6 +47,7 @@ public:
 
 private:
   class msg3_harq_timeout_notifier;
+  class msgb_harq_timeout_notifier;
 
   struct pending_rar_failed_attempts_t {
     unsigned pdcch = 0;
@@ -68,18 +69,30 @@ private:
     /// Attempts at scheduling a RAR and associated Msg3 grants.
     pending_rar_failed_attempts_t failed_attempts;
   };
-  /// Msg3 grant pending to be scheduled.
+
+  /// State of Msg3 grant pending to be scheduled and/or positive ACKed.
   struct pending_msg3_alloc {
     /// Detected PRACH Preamble associated to this Msg3 being scheduled.
     rach_indication_message::preamble preamble{};
-    /// UL Harq used to schedule Msg3.
+    /// UL HARQ entity used to allocate an UL HARQ process for Msg3.
     /// Note: [TS 38.321, 5.4.2.1] "For UL transmission with UL grant in RA Response, HARQ process identifier 0 is
     /// used".
-    unique_ue_harq_entity msg3_harq_ent;
+    unique_ue_harq_entity harq_ent;
   };
   struct msg3_alloc_candidate {
     unsigned     pusch_td_res_index;
     crb_interval crbs;
+  };
+
+  /// State for a pending MsgB PDSCH (pending to be scheduled or waiting for a positive HARQ-ACK).
+  struct pending_msgb_alloc {
+    rnti_t        msgb_rnti = rnti_t::INVALID_RNTI;
+    slot_point    prach_slot_rx;
+    slot_interval msgb_window;
+    /// List of detected MsgA preambles multiplexed into this MsgB response.
+    static_vector<rnti_t, MAX_PREAMBLES_PER_PRACH_OCCASION> tc_rntis;
+    /// DL HARQ entity used for MsgB PDSCH retransmissions. Allocated when MsgB is first scheduled.
+    unique_ue_harq_entity msgb_harq_ent;
   };
 
   /// Queue type used to store pending RACH indications.
@@ -94,7 +107,18 @@ private:
   /// Pre-compute invariant fields of Msg3 PDUs (PUSCH, DCI, etc.) for faster scheduling.
   void precompute_msg3_pdus();
 
-  void handle_rach_indication_impl(const rach_indication_message& msg, slot_point sl_tx);
+  void handle_rach_indication_impl(const rach_indication_message& msg, cell_resource_allocator& res_alloc);
+
+  /// Handle a PRACH occasion carrying Msg1 (4-step RACH) preambles.
+  void handle_msg1_occasion(const rach_indication_message::occasion&      occ,
+                            span<const rach_indication_message::preamble> preambles,
+                            slot_point                                    prach_slot_rx);
+
+  /// Handle a PRACH occasion carrying MsgA (2-step RACH) preambles and allocate their PUSCH receptions.
+  void handle_msga_occasion(const rach_indication_message::occasion&      occ,
+                            span<const rach_indication_message::preamble> preambles,
+                            slot_point                                    prach_slot_rx,
+                            cell_resource_allocator&                      res_alloc);
 
   void handle_pending_crc_indications_impl(cell_resource_allocator& res_alloc);
 
@@ -107,6 +131,9 @@ private:
 
   /// Determines whether the resource grid for the provided slot has the conditions for RAR scheduling.
   bool is_slot_candidate_for_rar(const cell_slot_resource_allocator& slot_res_alloc);
+
+  /// Schedule pending RARs in the cell resource grid.
+  void schedule_pending_rars(cell_resource_allocator& res_alloc);
 
   /// Try scheduling pending RARs for the provided slot.
   void schedule_pending_rars(cell_resource_allocator& res_alloc, slot_point pdcch_slot);
@@ -131,6 +158,9 @@ private:
 
   /// Schedule retransmission of Msg3.
   void schedule_msg3_retx(cell_resource_allocator& res_alloc, pending_msg3_alloc& msg3_ctx) const;
+
+  /// Schedule pending MsgB grants in the cell resource grid.
+  void schedule_pending_msgbs(cell_resource_allocator& res_alloc);
 
   sch_prbs_tbs get_nof_pdsch_prbs_required(unsigned time_res_idx, unsigned nof_ul_grants) const;
 
@@ -179,8 +209,8 @@ private:
 
   // -- State.
 
-  // Currently managed HARQ processes for Random Access in this cell.
-  cell_harq_manager msg3_harqs;
+  // Currently managed HARQ processes for Random Access in this cell (Msg3 UL retx + MsgB DL retx).
+  cell_harq_manager ra_harqs;
 
   // RACH indications pending to be processed.
   rach_indication_queue pending_rachs;
@@ -194,6 +224,9 @@ private:
   // Map of pending Msg3 grants to be scheduled or waiting for a positive HARQ-ACK.
   // Keyed by ring_idx = to_value(tc_rnti) % SIZE.
   circular_map<uint16_t, pending_msg3_alloc> pending_msg3s;
+
+  // List of pending MsgBs (2-step RACH responses) to be scheduled.
+  std::vector<pending_msgb_alloc> pending_msgbs;
 };
 
 } // namespace ocudu
