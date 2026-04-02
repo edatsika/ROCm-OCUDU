@@ -4,19 +4,16 @@
 
 #pragma once
 
-#include "../config/ue_configuration.h"
+#include "ocudu/scheduler/config/pucch_resource_builder_params.h"
 #include "ocudu/scheduler/result/pucch_info.h"
 
 namespace ocudu {
-
-/// Retrieves the correct N_{ID}^0 parameter for PUCCH scrambling from the UE configuration.
-unsigned get_n_id0_scrambling(const ue_cell_configuration& ue_cell_cfg, unsigned cell_pci);
 
 /// Contains the existing PUCCH grants currently allocated to a given UE.
 class pucch_existing_pdus_handler
 {
 public:
-  pucch_existing_pdus_handler(rnti_t crnti, span<pucch_info> pucchs, const pucch_config& pucch_cfg);
+  pucch_existing_pdus_handler(rnti_t crnti, span<pucch_info> pucchs, const pucch_resource_builder_params& res_params);
 
   [[nodiscard]] bool     is_empty() const { return pdus_cnt == 0; }
   [[nodiscard]] unsigned get_nof_unallocated_pdu() const { return pdus_cnt; }

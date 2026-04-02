@@ -7,6 +7,7 @@
 #include "ocudu/ran/csi_report/csi_report_config_helpers.h"
 #include "ocudu/ran/csi_report/csi_report_on_pucch_helpers.h"
 #include "ocudu/ran/pucch/pucch_configuration.h"
+#include "ocudu/scheduler/config/pucch_resource_builder_params.h"
 #include "ocudu/scheduler/result/pucch_format.h"
 #include <gtest/gtest.h>
 
@@ -38,33 +39,54 @@ public:
   {
     static constexpr auto max_code_rate = max_pucch_code_rate::dot_25;
 
+    const auto& cell_resources = t_bench.cell_cfg.init_bwp.ul.pucch.resources;
+    const auto& res_params     = t_bench.params.pucch_ded_params;
+
+    const auto sr_res_id      = pucch_sr_resource_id(0);
+    const auto res_set_cfg_id = pucch_resource_set_config_id(0);
+    const auto csi_res_id     = pucch_csi_resource_id(0);
+
     // Set the expected SR grant to the SR resource.
     pucch_expected_sr = test_helpers::make_ded_pucch_info(t_bench.cell_cfg,
-                                                          t_bench.cell_cfg.init_bwp.ul.pucch.resources[3],
+                                                          cell_resources[res_params.get_sr_cell_res_idx(sr_res_id)],
                                                           {.sr_bits = sr_nof_bits::one},
                                                           max_code_rate);
 
     // Set the expected Resource Set ID 0 HARQ-ACK grant to the first resource in Resource Set ID 0.
-    pucch_expected_res_set_0 = test_helpers::make_ded_pucch_info(
-        t_bench.cell_cfg, t_bench.cell_cfg.init_bwp.ul.pucch.resources[0], {.harq_ack_nof_bits = 1U}, max_code_rate);
+    pucch_expected_res_set_0 =
+        test_helpers::make_ded_pucch_info(t_bench.cell_cfg,
+                                          cell_resources[res_params.get_res_set_cell_res_idx<0>(res_set_cfg_id, 0)],
+                                          {.harq_ack_nof_bits = 1U},
+                                          max_code_rate);
 
-    pucch_expected_res_set_0_with_common = test_helpers::make_ded_pucch_info(
-        t_bench.cell_cfg, t_bench.cell_cfg.init_bwp.ul.pucch.resources[1], {.harq_ack_nof_bits = 1U}, max_code_rate);
+    pucch_expected_res_set_0_with_common =
+        test_helpers::make_ded_pucch_info(t_bench.cell_cfg,
+                                          cell_resources[res_params.get_res_set_cell_res_idx<0>(res_set_cfg_id, 1)],
+                                          {.harq_ack_nof_bits = 1U},
+                                          max_code_rate);
 
-    pucch_expected_res_set_0_with_common_and_sr = test_helpers::make_ded_pucch_info(
-        t_bench.cell_cfg, t_bench.cell_cfg.init_bwp.ul.pucch.resources[2], {.harq_ack_nof_bits = 1U}, max_code_rate);
+    pucch_expected_res_set_0_with_common_and_sr =
+        test_helpers::make_ded_pucch_info(t_bench.cell_cfg,
+                                          cell_resources[res_params.get_res_set_cell_res_idx<0>(res_set_cfg_id, 2)],
+                                          {.harq_ack_nof_bits = 1U},
+                                          max_code_rate);
 
     // Set the expected Resource Set ID 1 HARQ-ACK grant to the first resource in Resource Set ID 1.
-    pucch_expected_res_set_1 = test_helpers::make_ded_pucch_info(
-        t_bench.cell_cfg, t_bench.cell_cfg.init_bwp.ul.pucch.resources[5], {.harq_ack_nof_bits = 3U}, max_code_rate);
+    pucch_expected_res_set_1 =
+        test_helpers::make_ded_pucch_info(t_bench.cell_cfg,
+                                          cell_resources[res_params.get_res_set_cell_res_idx<1>(res_set_cfg_id, 0)],
+                                          {.harq_ack_nof_bits = 3U},
+                                          max_code_rate);
 
-    // Set the expected Resource Set ID 1 HARQ grant to the first resource in Resource Set ID 1.
-    pucch_expected_res_set_1_with_common = test_helpers::make_ded_pucch_info(
-        t_bench.cell_cfg, t_bench.cell_cfg.init_bwp.ul.pucch.resources[6], {.harq_ack_nof_bits = 3U}, max_code_rate);
+    pucch_expected_res_set_1_with_common =
+        test_helpers::make_ded_pucch_info(t_bench.cell_cfg,
+                                          cell_resources[res_params.get_res_set_cell_res_idx<1>(res_set_cfg_id, 1)],
+                                          {.harq_ack_nof_bits = 3U},
+                                          max_code_rate);
 
     // Set the expected HARQ CSI grant to the CSI resource.
     pucch_expected_csi = test_helpers::make_ded_pucch_info(t_bench.cell_cfg,
-                                                           t_bench.cell_cfg.init_bwp.ul.pucch.resources[11],
+                                                           cell_resources[res_params.get_csi_cell_res_idx(csi_res_id)],
                                                            {.csi_part1_nof_bits = default_csi_part1_bits},
                                                            max_code_rate);
     ocudu_assert(pucch_expected_res_set_1.format() == GetParam(),
@@ -517,7 +539,7 @@ TEST_P(pucch_alloc_ded_resources_test, alloc_common_and_ded_harq_ack_with_existi
   // PUCCH common resource.
   ASSERT_TRUE(find_pucch_pdu(pucch_pdus, [](const pucch_info& pdu) {
     return pdu.format() == pucch_format::FORMAT_1 and pdu.uci_bits.sr_bits == sr_nof_bits::no_sr and
-           pdu.uci_bits.harq_ack_nof_bits == 1U and pdu.pdu_context.is_common;
+           pdu.uci_bits.harq_ack_nof_bits == 1U and not pdu.pdu_context.res_id;
   }));
 }
 
@@ -540,7 +562,7 @@ TEST_P(pucch_alloc_ded_resources_test, alloc_common_and_ded_harq_ack_with_existi
   // PUCCH common resource.
   ASSERT_TRUE(find_pucch_pdu(pucch_pdus, [](const pucch_info& pdu) {
     return pdu.format() == pucch_format::FORMAT_1 and pdu.uci_bits.sr_bits == sr_nof_bits::no_sr and
-           pdu.uci_bits.harq_ack_nof_bits == 1U and pdu.pdu_context.is_common;
+           pdu.uci_bits.harq_ack_nof_bits == 1U and not pdu.pdu_context.res_id;
   }));
 }
 
@@ -863,7 +885,7 @@ TEST_P(pucch_alloc_ded_resources_test, test_for_private_fnc_retrieving_existing_
   ASSERT_EQ(2U, slot_grid.result.ul.pucchs.size());
   ASSERT_TRUE(find_pucch_pdu(slot_grid.result.ul.pucchs, [rnti = t_bench.get_main_ue().crnti](const pucch_info& pdu) {
     return pdu.format() == pucch_format::FORMAT_1 and pdu.crnti == rnti and pdu.uci_bits.harq_ack_nof_bits == 1U and
-           pdu.pdu_context.is_common;
+           not pdu.pdu_context.res_id;
   }));
 
   auto pri_ue2 = t_bench.pucch_alloc.alloc_ded_harq_ack(
@@ -880,7 +902,7 @@ TEST_P(pucch_alloc_ded_resources_test, test_for_private_fnc_retrieving_existing_
   }));
   ASSERT_TRUE(find_pucch_pdu(slot_grid.result.ul.pucchs, [rnti = t_bench.get_main_ue().crnti](const pucch_info& pdu) {
     return pdu.format() == pucch_format::FORMAT_1 and pdu.crnti == rnti and pdu.uci_bits.harq_ack_nof_bits == 1U and
-           pdu.pdu_context.is_common;
+           not pdu.pdu_context.res_id;
   }));
 
   // Advance by 1 slot. Allocate:
@@ -904,7 +926,7 @@ TEST_P(pucch_alloc_ded_resources_test, test_for_private_fnc_retrieving_existing_
   }));
   ASSERT_TRUE(find_pucch_pdu(slot_grid.result.ul.pucchs, [rnti = t_bench.get_main_ue().crnti](const pucch_info& pdu) {
     return pdu.format() == pucch_format::FORMAT_1 and pdu.crnti == rnti and pdu.uci_bits.harq_ack_nof_bits == 1U and
-           pdu.pdu_context.is_common;
+           not pdu.pdu_context.res_id;
   }));
   ASSERT_TRUE(find_pucch_pdu(slot_grid.result.ul.pucchs, [rnti = t_bench.get_ue(ue2_idx).crnti](const pucch_info& pdu) {
     return pdu.format() == pucch_format::FORMAT_1 and pdu.crnti == rnti and pdu.uci_bits.harq_ack_nof_bits == 1U;
@@ -934,7 +956,7 @@ TEST_P(pucch_alloc_ded_resources_test, test_for_private_fnc_retrieving_existing_
       }));
   ASSERT_TRUE(find_pucch_pdu(slot_grid.result.ul.pucchs, [rnti = t_bench.get_main_ue().crnti](const pucch_info& pdu) {
     return pdu.format() == pucch_format::FORMAT_1 and pdu.crnti == rnti and pdu.uci_bits.harq_ack_nof_bits == 1U and
-           pdu.pdu_context.is_common;
+           not pdu.pdu_context.res_id;
   }));
   ASSERT_TRUE(find_pucch_pdu(slot_grid.result.ul.pucchs, [rnti = t_bench.get_ue(ue2_idx).crnti](const pucch_info& pdu) {
     return pdu.format() == pucch_format::FORMAT_1 and pdu.crnti == rnti and pdu.uci_bits.harq_ack_nof_bits == 1U;

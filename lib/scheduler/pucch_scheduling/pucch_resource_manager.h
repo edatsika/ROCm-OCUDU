@@ -8,6 +8,8 @@
 #include "pucch_collision_manager.h"
 #include "ocudu/ran/pucch/pucch_constants.h"
 #include "ocudu/ran/slot_point.h"
+#include "ocudu/scheduler/config/cell_bwp_config.h"
+#include "ocudu/scheduler/config/pucch_resource_builder_params.h"
 #include "ocudu/scheduler/resource_grid_util.h"
 #include <array>
 #include <optional>
@@ -70,9 +72,8 @@ public:
     ue_reservation_guard(ue_reservation_guard&&) noexcept            = delete;
     ue_reservation_guard& operator=(ue_reservation_guard&&) noexcept = delete;
 
-    rnti_t                       get_rnti() const { return rnti; }
-    slot_point                   get_slot() const { return sl; }
-    const ue_cell_configuration& get_ue_cfg() const { return ue_cfg; }
+    rnti_t     get_rnti() const { return rnti; }
+    slot_point get_slot() const { return sl; }
 
     /// \brief Reserve the next available PUCCH resource in PUCCH Resource Set ID 0.
     /// \return If there is any PUCCH resource available, it returns (i) the pointer to the configuration and (ii) the
@@ -143,22 +144,27 @@ public:
     struct reservation {
       std::optional<unsigned> cell_res_id;
     };
-    pucch_resource_manager*      parent;
-    cell_slot_resource_grid&     ul_res_grid;
-    const rnti_t                 rnti;
-    const slot_point             sl;
-    const ue_cell_configuration& ue_cfg;
+    pucch_resource_manager*              parent;
+    cell_slot_resource_grid&             ul_res_grid;
+    const pucch_resource_builder_params& res_params;
+    const cell_pucch_config&             cell_pucch_cfg;
+    const rnti_t                         rnti;
+    const slot_point                     sl;
+    const ue_bwp_config&                 ue_bwp_cfg;
 
     // Tracks the reservations made for the UE before commit().
     // Does not include reservations made prior to the creation of this guard.
     std::array<reservation, static_cast<size_t>(resource_usage_type::nof_usage_types)> reservations;
 
     // Helper functions that implement the public interface methods.
-    pucch_harq_resource_alloc_record reserve_next_harq_res_available(pucch_res_set_idx res_set_idx);
+    template <unsigned ResourceSetId>
+    pucch_harq_resource_alloc_record reserve_next_harq_res_available();
 
-    const pucch_resource* reserve_harq_resource_by_res_indicator(unsigned d_pri, pucch_res_set_idx res_set_idx);
+    template <unsigned ResourceSetId>
+    const pucch_resource* reserve_harq_resource_by_res_indicator(unsigned d_pri);
 
-    bool release_harq_resource(pucch_res_set_idx res_set_idx);
+    template <unsigned ResourceSetId>
+    bool release_harq_resource();
 
     const pucch_resource* get_res_by_id(pucch_res_id_t res_id) const;
   };
