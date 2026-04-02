@@ -180,6 +180,18 @@ bool xnap_source_handover_preparation_procedure::send_handover_request()
     // Set CHO indication: this is a conditional handover preparation, not an immediate handover.
     ho_request->ch_oinfo_req_present           = true;
     ho_request->ch_oinfo_req.cho_trigger.value = ch_otrigger_opts::cho_initiation;
+    // Inform the target how long to keep the prepared UE context active.
+    if (request.cho_timeout.count() > 0) {
+      const auto dur_secs =
+          std::chrono::duration_cast<std::chrono::seconds>(request.cho_timeout).count();
+      if (dur_secs >= 1) {
+        ho_request->ch_oinfo_req.ie_exts_present                              = true;
+        ho_request->ch_oinfo_req.ie_exts.cho_time_based_info_present          = true;
+        ho_request->ch_oinfo_req.ie_exts.cho_time_based_info.cho_ho_win_start = 0;
+        ho_request->ch_oinfo_req.ie_exts.cho_time_based_info.cho_ho_win_dur =
+            static_cast<uint16_t>(std::min(dur_secs, static_cast<decltype(dur_secs)>(6000)));
+      }
+    }
   }
 
   // Fill UE history info.

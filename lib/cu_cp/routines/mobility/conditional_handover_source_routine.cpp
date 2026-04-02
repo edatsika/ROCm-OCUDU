@@ -199,7 +199,11 @@ bool conditional_handover_source_routine::resolve_source_ue()
 
   if (source_ue == nullptr || !source_ue->get_cho_context().has_value() ||
       source_ue->get_cho_context()->state == cu_cp_ue_cho_context::state_t::idle) {
-    logger.debug("ue={}: Access Success received but no active CHO context", msg.ue_index);
+    // Only log when a CHO context exists but is unexpectedly idle. No CHO context means this
+    // is likely an inter-CU HO target UE receiving Access Success — expected and not actionable.
+    if (source_ue != nullptr && source_ue->get_cho_context().has_value()) {
+      logger.debug("ue={}: Access Success received but no active CHO context", msg.ue_index);
+    }
     return false;
   }
 

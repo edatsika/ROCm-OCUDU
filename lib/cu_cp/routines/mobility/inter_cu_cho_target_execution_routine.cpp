@@ -125,9 +125,18 @@ void inter_cu_cho_target_execution_routine::fill_e1ap_bearer_context_modificatio
 
 bool inter_cu_cho_target_execution_routine::initialize_reconfiguration_timeout()
 {
+  // If the source signalled a CHO window duration, use it as the primary timeout — it covers
+  // the full time until the UE triggers and completes the conditional handover.
+  if (execution_ctxt.cho_timeout.count() > 0) {
+    reconf_timeout = execution_ctxt.cho_timeout;
+    return true;
+  }
+
+  // Fall back to T304 + 1s guard when no CHO window was signalled.
   std::optional<std::chrono::milliseconds> t304_ms = ue->get_rrc_ue()->get_cell_context().timers.t304;
   if (!t304_ms.has_value()) {
-    report_fatal_error("T304 not configured in cell context");
+    logger.warning("ue={}: T304 not configured in cell context, using default 2000ms", ue->get_ue_index());
+    t304_ms = std::chrono::milliseconds{2000};
   }
 
   reconf_timeout =

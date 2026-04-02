@@ -63,6 +63,10 @@ struct xnap_handover_target_execution_context {
   /// When true, the UE arrived via Conditional HO (source sent no explicit HO Command);
   /// the target execution follows the CHO sequence (TS 38.423 Section 8.2.4).
   bool is_conditional_handover = false;
+  /// How long the target should retain the prepared UE context waiting for the UE to arrive.
+  /// Populated from CHOTimeBasedInformation::cHO-HOWindowDuration in the XNAP HandoverRequest.
+  /// Zero means not signalled by the source (fall back to T304-based timeout).
+  std::chrono::milliseconds cho_timeout = std::chrono::milliseconds{0};
 };
 
 } // namespace ocudu::ocucp

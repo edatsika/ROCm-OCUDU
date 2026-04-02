@@ -169,5 +169,6 @@ bool xnap_target_handover_preparation_procedure::prepare_execution_context(const
         std::get<cu_cp_xn_pdu_session_res_admitted_item>(variant_pdu_session_item));
   }
   execution_context.pdu_session_failed_to_setup_list = ho_ack.pdu_session_failed_to_setup_list;
+  execution_context.cho_timeout                      = request.cho_timeout;
   return true;
 }
