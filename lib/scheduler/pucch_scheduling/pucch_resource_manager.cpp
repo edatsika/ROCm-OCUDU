@@ -77,7 +77,6 @@ pucch_resource_manager::ue_reservation_guard::ue_reservation_guard(pucch_resourc
   cell_pucch_cfg(parent_->cell_cfg.init_bwp.ul.pucch),
   rnti(rnti_),
   sl(slot_alloc.slot),
-  ue_cfg(ue_cfg_),
   ue_bwp_cfg(ue_cfg_.bwp(to_bwp_id(0)).bwp)
 {
   ocudu_sanity_check(parent != nullptr, "PUCCH Resource Manager pointer cannot be null");
