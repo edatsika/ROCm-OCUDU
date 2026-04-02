@@ -5,6 +5,7 @@
 #pragma once
 
 #include "ocudu/cu_cp/cell_meas_manager_config.h"
+#include "ocudu/cu_cp/cu_cp_cho_types.h"
 #include "ocudu/cu_cp/cu_cp_types.h"
 #include "ocudu/e1ap/cu_cp/e1ap_cu_cp.h"
 #include "ocudu/f1ap/cu_cp/f1ap_cu.h"
@@ -469,6 +470,13 @@ public:
   /// \brief Handle the reception of a Handover Cancel message.
   /// \param[in] ue_index The index of the UE that is the target of the handover cancel.
   virtual void handle_handover_cancel_received(ue_index_t ue_index) = 0;
+
+  /// \brief Handle the reception of a HandoverSuccess message (TS 38.423 section 8.2.4).
+  /// Indicates that the source UE has successfully executed CHO to a remote target CU-CP.
+  /// \param[in] source_ue_index The source UE index resolved from the XNAP UE ID mapping.
+  /// \param[in] winner_peer_xnap_ue_id The target's XNAP UE ID identifying the winning candidate.
+  virtual void handle_xnap_handover_success_received(ue_index_t        source_ue_index,
+                                                     peer_xnap_ue_id_t winner_peer_xnap_ue_id) = 0;
 
   /// \brief Handle the reception of an XNAP UE Context Release message.
   /// \param[in] ue_index The index of the UE to be released.

@@ -13,10 +13,12 @@ conditional_handover_cancellation_routine::conditional_handover_cancellation_rou
     ue_index_t                        source_ue_index_,
     cu_cp_ue_context_release_handler& ue_context_release_handler_,
     ue_manager&                       ue_mng_,
+    xnap_repository*                  xnap_db_,
     ocudulog::basic_logger&           logger_) :
   source_ue_index(source_ue_index_),
   ue_context_release_handler(ue_context_release_handler_),
   ue_mng(ue_mng_),
+  xnap_db(xnap_db_),
   logger(logger_)
 {
 }
@@ -63,9 +65,16 @@ void conditional_handover_cancellation_routine::operator()(coro_context<async_ta
     CORO_EARLY_RETURN();
   }
 
-  // Collect all inter-DU target UE indices to release.
+  // Cancel inter-CU candidates via Xn (ConditionalHandoverCancel) and collect intra-CU targets for release.
   for (const auto& candidate : source_ue->get_cho_context()->candidates) {
-    if (candidate.target_ue_index != ue_index_t::invalid && candidate.target_ue_index != source_ue_index) {
+    if (candidate.is_inter_cu()) {
+      if (xnap_db != nullptr && candidate.xnc_index.has_value()) {
+        xnap_interface* xnap = xnap_db->find_xnap(*candidate.xnc_index);
+        if (xnap != nullptr) {
+          xnap->handle_cho_cancel_required(source_ue_index, candidate.target_cgi);
+        }
+      }
+    } else if (candidate.target_ue_index != ue_index_t::invalid && candidate.target_ue_index != source_ue_index) {
       targets_to_release.push_back(candidate.target_ue_index);
     }
   }

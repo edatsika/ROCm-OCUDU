@@ -180,18 +180,45 @@ void mobility_manager::handle_conditional_handover(
   std::vector<cu_cp_cho_target_candidate> targets;
   for (pci_t target_pci : unique_target_pcis) {
     du_index_t target_du = du_db.find_du(target_pci);
-    if (target_du == du_index_t::invalid) {
-      logger.warning("ue={}: CHO preparation failed. Target PCI {} not found in any local DU", ue_index, target_pci);
-      return;
+    if (target_du != du_index_t::invalid) {
+      // Intra-CU candidate: target cell served by a local DU.
+      std::optional<nr_cell_global_id_t> cgi =
+          du_db.get_du_processor(target_du).get_mobility_handler().get_cgi(target_pci);
+      if (!cgi.has_value()) {
+        logger.warning("ue={}: CHO candidate skipped. Could not find CGI for PCI {}", ue_index, target_pci);
+        continue;
+      }
+      targets.push_back({target_pci, cgi.value(), target_du, std::nullopt});
+    } else {
+      // Inter-CU candidate: try to find a remote CU-CP via Xn.
+      std::optional<xnc_peer_index_t> xnc_index;
+      nr_cell_global_id_t             cgi;
+      for (const auto& [idx, xnap] : xnap_db.get_xnaps()) {
+        // Use cell_meas_mng to look up NCI for this PCI and derive CGI.
+        expected<std::pair<unsigned, nr_cell_identity>> nbr = cell_meas_mng.find_neighbour_nci(target_pci);
+        if (!nbr.has_value()) {
+          continue;
+        }
+        gnb_id_t   target_gnb_id = nbr->second.gnb_id(nbr->first);
+        if (xnap->has_peer_gnb_id(target_gnb_id)) {
+          xnc_index = idx;
+          plmn_identity plmn = u->get_ue_context().plmn;
+          cgi                = nr_cell_global_id_t{plmn, nbr->second};
+          break;
+        }
+      }
+      if (!xnc_index.has_value()) {
+        logger.warning("ue={}: CHO candidate skipped. PCI {} not found in any local DU or Xn peer",
+                       ue_index,
+                       target_pci);
+        continue;
+      }
+      targets.push_back({target_pci, cgi, du_index_t::invalid, xnc_index});
     }
-    // Lookup CGI at target DU.
-    std::optional<nr_cell_global_id_t> cgi =
-        du_db.get_du_processor(target_du).get_mobility_handler().get_cgi(target_pci);
-    if (!cgi.has_value()) {
-      logger.warning("ue={}: CHO preparation failed. Could not find CGI for PCI {}", ue_index, target_pci);
-      return;
-    }
-    targets.push_back({target_pci, cgi.value(), target_du});
+  }
+  if (targets.empty()) {
+    logger.warning("ue={}: CHO preparation failed. No valid candidates after PCI lookup", ue_index);
+    return;
   }
 
   // Check if CHO is already pending.
@@ -208,7 +235,7 @@ void mobility_manager::handle_conditional_handover(
   }
   cho_ctx->clear();
 
-  logger.info("ue={}: Starting intra-CU CHO with {} candidate(s)", ue_index, targets.size());
+  logger.info("ue={}: Starting CHO with {} candidate(s)", ue_index, targets.size());
 
   cu_cp_intra_cu_cho_request cho_request{};
   cho_request.source_ue_index   = ue_index;

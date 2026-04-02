@@ -12,6 +12,8 @@
 #include "routines/mobility/conditional_handover_coordinator_routine.h"
 #include "routines/mobility/conditional_handover_source_routine.h"
 #include "routines/mobility/conditional_handover_target_routine.h"
+#include "routines/mobility/inter_cu_cho_source_completion_routine.h"
+#include "routines/mobility/inter_cu_cho_target_execution_routine.h"
 #include "routines/mobility/inter_cu_handover_execution_target_routine.h"
 #include "routines/mobility/inter_cu_handover_source_routine.h"
 #include "routines/mobility/inter_cu_handover_target_routine.h"
@@ -1064,6 +1066,37 @@ void cu_cp_impl::handle_handover_cancel_received(ue_index_t ue_index)
   ue->get_task_sched().schedule_async_task(handle_ue_context_release(release_request));
 }
 
+void cu_cp_impl::handle_xnap_handover_success_received(ue_index_t        source_ue_index,
+                                                       peer_xnap_ue_id_t winner_peer_xnap_ue_id)
+{
+  cu_cp_ue* ue = ue_mng.find_du_ue(source_ue_index);
+  if (ue == nullptr || !ue->get_cho_context().has_value()) {
+    logger.warning("ue={}: HandoverSuccess ignored: source UE or CHO context missing", source_ue_index);
+    return;
+  }
+
+  // Stop the CHO execution timer — the UE has already executed CHO.
+  ue->get_cho_context()->cho_execution_timer.stop();
+
+  // Find the winning candidate to get the xnc_index for SN Status Transfer.
+  xnap_interface* winner_xnap = nullptr;
+  for (const auto& candidate : ue->get_cho_context()->candidates) {
+    if (candidate.peer_xnap_ue_id == winner_peer_xnap_ue_id && candidate.xnc_index.has_value()) {
+      winner_xnap = xnap_db.find_xnap(*candidate.xnc_index);
+      break;
+    }
+  }
+
+  if (winner_xnap == nullptr) {
+    logger.warning("ue={}: HandoverSuccess: could not find XNAP interface for winner peer_xnap_ue_id={}",
+                   source_ue_index,
+                   winner_peer_xnap_ue_id);
+  }
+
+  ue->get_task_sched().schedule_async_task(launch_async<inter_cu_cho_source_completion_routine>(
+      source_ue_index, winner_peer_xnap_ue_id, ue_mng, cu_up_db, winner_xnap, *this, logger));
+}
+
 void cu_cp_impl::handle_xnap_ue_context_release_received(ue_index_t ue_index)
 {
   cu_cp_ue* ue = ue_mng.find_ue(ue_index);
@@ -1331,7 +1364,8 @@ cu_cp_impl::handle_intra_cu_cho_request(const cu_cp_intra_cu_cho_request& reques
       CORO_RETURN(cu_cp_intra_cu_cho_response{});
     });
   }
-  return launch_async<conditional_handover_coordinator_routine>(request, du_db, *this, ue_mng, mobility_mng, logger);
+  return launch_async<conditional_handover_coordinator_routine>(
+      request, du_db, *this, ue_mng, mobility_mng, ngap_db, &xnap_db, logger);
 }
 
 void cu_cp_impl::handle_intra_cell_handover_required(ue_index_t ue_index)
@@ -1518,7 +1552,7 @@ void cu_cp_impl::initialize_cho_execution_timer(ue_index_t ue_index, std::chrono
       return;
     }
     ue2->get_task_sched().schedule_async_task(
-        launch_async<conditional_handover_cancellation_routine>(ue_index, *this, ue_mng, logger));
+        launch_async<conditional_handover_cancellation_routine>(ue_index, *this, ue_mng, &xnap_db, logger));
   });
   ue->get_cho_context()->cho_execution_timer.run();
   logger.debug("ue={}: CHO execution timer started ({}ms)", ue_index, timeout.count());

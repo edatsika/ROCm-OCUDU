@@ -65,6 +65,13 @@ public:
     cu_cp_handler->handle_handover_cancel_received(ue_index);
   }
 
+  void on_handover_success_received(ue_index_t        source_ue_index,
+                                    peer_xnap_ue_id_t winner_peer_xnap_ue_id) override
+  {
+    ocudu_assert(cu_cp_handler != nullptr, "CU-CP XNAP handler must not be nullptr");
+    cu_cp_handler->handle_xnap_handover_success_received(source_ue_index, winner_peer_xnap_ue_id);
+  }
+
   void on_ue_context_release_received(ue_index_t ue_index) override
   {
     ocudu_assert(cu_cp_handler != nullptr, "CU-CP XNAP handler must not be nullptr");

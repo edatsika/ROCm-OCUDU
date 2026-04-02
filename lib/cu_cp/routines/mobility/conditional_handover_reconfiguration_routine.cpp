@@ -65,6 +65,10 @@ void conditional_handover_reconfiguration_routine::operator()(coro_context<async
     // started.
     std::vector<ue_index_t> armed_target_ues;
     for (const auto& candidate : cho_ctx->candidates) {
+      if (candidate.is_inter_cu()) {
+        // Inter-CU candidates have no local target UE; completion is handled via Xn.
+        continue;
+      }
       if (std::find(armed_target_ues.begin(), armed_target_ues.end(), candidate.target_ue_index) !=
           armed_target_ues.end()) {
         logger.debug("ue={}: CHO observer already started for target_ue={}. Skipping duplicate candidate "
