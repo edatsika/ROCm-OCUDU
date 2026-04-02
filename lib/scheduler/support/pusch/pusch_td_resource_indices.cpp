@@ -13,13 +13,14 @@ using namespace ocudu;
 using pusch_index_list = static_vector<unsigned, pusch_constants::MAX_NOF_PUSCH_TD_RES_ALLOCS>;
 
 /// Get minimum value for k1 given the common and dedicated configurations.
+/// When a search space is provided, its k1 candidates take precedence over the cell-level list.
 static unsigned get_min_k1(span<const uint8_t> dl_data_to_ul_ack, const search_space_info* ss_info)
 {
-  unsigned min_k1 = *std::min(dl_data_to_ul_ack.begin(), dl_data_to_ul_ack.end());
   if (ss_info != nullptr) {
-    min_k1 = *std::min(ss_info->get_k1_candidates().begin(), ss_info->get_k1_candidates().end());
+    const auto& k1_candidates = ss_info->get_k1_candidates();
+    return *std::min_element(k1_candidates.begin(), k1_candidates.end());
   }
-  return min_k1;
+  return *std::min_element(dl_data_to_ul_ack.begin(), dl_data_to_ul_ack.end());
 }
 
 namespace {
@@ -118,7 +119,8 @@ public:
         pusch_td_resource_indices_per_slot(nof_slot);
 
     for (unsigned sl_idx = 0; sl_idx != nof_slot; ++sl_idx) {
-      // Only values different from 0 have valid k.
+      // Skip slots that were not assigned a PDCCH (0 is used as "not assigned" sentinel; k2 >= 1 is always guaranteed
+      // by get_k2() since ul_slot != dl_slot).
       if (dl_min_k2_vec[sl_idx] == 0) {
         continue;
       }
@@ -164,7 +166,7 @@ private:
   unsigned find_closest_viable_dl_slot(unsigned ul_slot, bool check_dl_slot_is_free = false) const
   {
     unsigned dl_slot = ul_slot >= min_k2 ? ul_slot - min_k2 : ul_slot + nof_slot - min_k2;
-    ocudu_assert(dl_min_k2_vec[dl_slot] < dl_min_k2_vec.size(), "Wrong size");
+    ocudu_assert(dl_slot < dl_min_k2_vec.size(), "dl_slot out of range");
     while (not has_active_tdd_dl_symbols(tdd_cfg, dl_slot) or (check_dl_slot_is_free and dl_min_k2_vec[dl_slot] != 0)) {
       if (dl_slot > 0) {
         --dl_slot;
@@ -248,24 +250,24 @@ pusch_index_list ocudu::get_pusch_td_resource_indices(slot_point                
       continue;
     }
 
-    // NOTE: the condition pusch_td_res.k2 <= min_k1 is used for the fallback scheduler, to prevent an allocation of a
-    // PUSCH before a PUCCH for the same UE on the same slot.
-    if (is_dl_heavy and pusch_td_res.k2 <= min_k1) {
+    if (is_dl_heavy) {
       // DL-heavy case.
-      // [Implementation-defined] For DL heavy TDD configuration, in the PUSCH time domain resources list, we allow only
-      // entries with the same k2 value that are less than or equal to minimum value of k1(s); these multiple entries
-      // can have different symbols.
+      // NOTE: the condition pusch_td_res.k2 <= min_k1 prevents allocating a PUSCH before a PUCCH for the same UE on
+      // the same slot (used by the fallback scheduler).
+      // [Implementation-defined] For DL heavy TDD configuration, we allow only entries with the same k2 value that are
+      // less than or equal to minimum value of k1(s); these multiple entries can have different symbols.
+      if (pusch_td_res.k2 > min_k1) {
+        continue;
+      }
+      // Stop if this entry has a different k2 than what was already collected (all accepted entries must share k2).
       if (not result.empty() and
-          std::any_of(result.begin(),
-                      result.end(),
-                      [candidate_k2 = pusch_td_res.k2, pusch_time_domain_list](unsigned td_idx_it) {
-                        return candidate_k2 != pusch_time_domain_list[td_idx_it].k2;
-                      })) {
+          std::any_of(result.begin(), result.end(), [candidate_k2 = pusch_td_res.k2, &pusch_time_domain_list](unsigned res_idx) {
+            return candidate_k2 != pusch_time_domain_list[res_idx].k2;
+          })) {
         break;
       }
       result.push_back(td_idx);
-    }
-    if (not is_dl_heavy) {
+    } else {
       // UL-heavy case.
       // [Implementation-defined] For UL heavy TDD configuration multiple k2 values are considered for scheduling
       // since it allows multiple UL PDCCH allocations in the same slot for same UE but with different k2 values.
@@ -356,8 +358,7 @@ ocudu::get_fairly_distributed_pusch_td_resource_indices(subcarrier_spacing      
     if (not is_tdd_full_ul_slot(tdd_cfg_common, ul_slot_idx)) {
       continue;
     }
-    // Flag indicating whether a valid PDCCH slot for a given UL slot is found or not.
-    bool                    no_pdcch_slot_found = true;
+    bool                    pdcch_slot_found = false;
     std::optional<unsigned> last_valid_k2;
     for (unsigned k2 = 0; k2 <= max_k2; ++k2) {
       unsigned dl_slot_idx = (nof_slots + ul_slot_idx - k2) % nof_slots;
@@ -371,18 +372,14 @@ ocudu::get_fairly_distributed_pusch_td_resource_indices(subcarrier_spacing      
       if (not idx.has_value()) {
         continue;
       }
-      // Store PDCCH slot index at which a valid PUSCH time domain resource was found to schedule PUSCH at given UL
-      // slot.
+      // Record the last k2 for which a valid (DL slot, PUSCH TD resource) pair exists, to use as fallback below.
       last_valid_k2 = k2;
-      // Skip if nof. PUSCH time domain resource indexes for this PDCCH slot exceed nof. UL PDCCHs that can be scheduled
-      // in each PDCCH slot.
+      // Skip if this PDCCH slot already carries the target number of UL PDCCHs; look for an earlier one.
       if (final_pusch_td_list_per_slot[dl_slot_idx].size() >= nof_ul_pdcchs_per_dl_slot) {
-        // Search for next PDCCH slot.
         continue;
       }
-      // Store the nof. PUSCH time domain resource index for this PDCCH slot.
       final_pusch_td_list_per_slot[dl_slot_idx].push_back(*idx);
-      no_pdcch_slot_found = false;
+      pdcch_slot_found = true;
       break;
     }
 
@@ -390,48 +387,45 @@ ocudu::get_fairly_distributed_pusch_td_resource_indices(subcarrier_spacing      
     ocudu_sanity_check(
         last_valid_k2.has_value(), "Invalid TDD pattern which leads to UL slot index={} with no valid k2", ul_slot_idx);
 
-    // [Implementation-defined] If no PDCCH slot is found we pick the last valid PDCCH slot for this UL slot, regardless
-    // of the restriction to not allow more than \c nof_ul_pdcchs_per_dl_slot UL PDCCHs per PDCCH slot.
-    if (no_pdcch_slot_found) {
-      std::optional<uint8_t> min_k2;
-      for (const auto& pusch_time_domain : pusch_time_domain_list) {
-        min_k2 = std::min(min_k2.value_or(pusch_time_domain.k2), pusch_time_domain.k2);
-      }
+    // [Implementation-defined] If no PDCCH slot is found (all candidates are already full), fall back to the last valid
+    // PDCCH slot ignoring the per-slot UL PDCCH limit.
+    if (not pdcch_slot_found) {
+      const uint8_t  min_k2 = std::min_element(pusch_time_domain_list.begin(),
+                                               pusch_time_domain_list.end(),
+                                               [](const auto& a, const auto& b) { return a.k2 < b.k2; })
+                                  ->k2;
       const unsigned required_k2      = last_valid_k2.value();
       const unsigned pdcch_slot_index = (ul_slot_idx + nof_slots - required_k2) % nof_slots;
 
-      // If the required k2 value is less than the minimum k2 value in the PUSCH time domain resource list, then we look
-      // for the minimum k2 value that is greater than the DL-UL transmission period, as this is the PDCCH slot closest
-      // to the PUSCH slot.
-      std::optional<uint8_t> candidate_required_k2;
-      if (required_k2 < min_k2.value()) {
-        for (const auto& pusch_time_domain : pusch_time_domain_list) {
-          if (pusch_time_domain.k2 > tdd_cfg_common.pattern1.dl_ul_tx_period_nof_slots) {
-            candidate_required_k2 =
-                std::min(candidate_required_k2.value_or(pusch_time_domain.k2), pusch_time_domain.k2);
+      // If required_k2 is below the minimum k2 in the TD list, the PDCCH slot for this UL slot lies in the previous
+      // TDD period. In that case, pick the smallest k2 that exceeds the pattern1 period length.
+      std::optional<unsigned> candidate_k2;
+      if (required_k2 < min_k2) {
+        for (const auto& td : pusch_time_domain_list) {
+          if (td.k2 > tdd_cfg_common.pattern1.dl_ul_tx_period_nof_slots) {
+            if (not candidate_k2.has_value() or td.k2 < candidate_k2.value()) {
+              candidate_k2 = td.k2;
+            }
           }
         }
       } else {
-        candidate_required_k2 = required_k2;
+        candidate_k2 = required_k2;
       }
-      // If a valid PUSCH time domain resource is found for the required k2 value, then we store it.
-      std::optional<unsigned> pusch_td_res_idx_for_required_k2 = std::nullopt;
-      if (candidate_required_k2.has_value()) {
-        auto& init_push_list = initial_pusch_td_list_per_slot[pdcch_slot_index];
-        auto* it             = std::find_if(init_push_list.begin(),
-                                init_push_list.end(),
-                                [&pusch_time_domain_list, candidate_required_k2](unsigned pusch_td_res_idx) {
-                                  return pusch_time_domain_list[pusch_td_res_idx].k2 == candidate_required_k2.value();
-                                });
-        if (it != init_push_list.end()) {
-          pusch_td_res_idx_for_required_k2.emplace(*it);
+
+      if (candidate_k2.has_value()) {
+        auto& init_list = initial_pusch_td_list_per_slot[pdcch_slot_index];
+        auto* it        = std::find_if(init_list.begin(), init_list.end(), [&](unsigned res_idx) {
+          return pusch_time_domain_list[res_idx].k2 == candidate_k2.value();
+        });
+        if (it != init_list.end()) {
+          final_pusch_td_list_per_slot[pdcch_slot_index].push_back(*it);
+        } else {
+          ocudulog::basic_logger& logger = ocudulog::fetch_basic_logger("SCHED", false);
+          logger.warning("No valid PUSCH time domain resource found for UL slot idx={}", ul_slot_idx);
         }
-      }
-      if (pusch_td_res_idx_for_required_k2.has_value()) {
-        final_pusch_td_list_per_slot[pdcch_slot_index].push_back(*pusch_td_res_idx_for_required_k2);
       } else {
         ocudulog::basic_logger& logger = ocudulog::fetch_basic_logger("SCHED", false);
-        logger.warning("No valid PUSCH time domain resource found for UL slot dx={}", ul_slot_idx);
+        logger.warning("No valid PUSCH time domain resource found for UL slot idx={}", ul_slot_idx);
       }
     }
   }
