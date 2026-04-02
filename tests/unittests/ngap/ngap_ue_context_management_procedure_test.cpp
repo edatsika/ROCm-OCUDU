@@ -534,6 +534,24 @@ TEST_F(ngap_ue_context_management_procedure_test,
             asn1::ngap::cause_radio_network_e::options::inconsistent_remote_ue_ngap_id);
 }
 
+
+TEST_F(ngap_ue_context_management_procedure_test, when_context_release_request_without_prior_ue_ctxt_arrives_then_no_crash_occurs)
+{
+  //   id:000000,sig:06,src:000003,time:1226,execs:2076,op:havoc,rep:4
+  const uint8_t raw[] = {0x00, 0x29, 0x08, 0x00, 0x0c, 0x73, 0x6e, 0x00, 0x0c,
+                         0x73, 0x6e, 0x67, 0x1e, 0x00, 0x67, 0x1e, 0x00, 0x73,
+                         0x6e, 0x67, 0x6e, 0x62, 0x2a, 0x31, 0x00};
+
+  byte_buffer buf{byte_buffer::fallback_allocation_tag{}, span<const uint8_t>(raw, sizeof(raw))};
+  asn1::cbit_ref bref{buf};
+  ngap_message   msg{};
+  (void)msg.pdu.unpack(bref);
+
+  // Must not crash, assert, or trigger ASAN/UBSan errors.
+  ngap->handle_message(msg);
+  ctrl_worker.run_pending_tasks();
+}
+
 ///////////////////////////////////////////////////////////////////////////////
 //                             UE Context Modification
 ///////////////////////////////////////////////////////////////////////////////
