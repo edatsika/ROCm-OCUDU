@@ -3,14 +3,15 @@
 # Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 
-add_executable(slice_scheduler_test slice_scheduler_test.cpp slice_ue_repository_test.cpp)
+add_executable(slice_scheduler_test intra_slice_scheduler_test.cpp slice_scheduler_test.cpp slice_ue_repository_test.cpp)
 target_link_libraries(slice_scheduler_test
         ocudu_sched
+        sched_config
         scheduler_test_utils
         scheduler_test_suite
         mac_configuration_helpers
         sched_test_doubles
         gtest
-        gtest_main
+        ocudu_gtest_main
 )
-add_test(slice_scheduler_test slice_scheduler_test)
+gtest_discover_tests(slice_scheduler_test)

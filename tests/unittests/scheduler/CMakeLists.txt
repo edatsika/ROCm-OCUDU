@@ -50,7 +50,7 @@ target_link_libraries(scheduler_test
         sched_test_doubles
         gtest
         ocudu_gtest_main)
-add_test(scheduler_test scheduler_test)
+gtest_discover_tests(scheduler_test)
 
 add_executable(scheduler_test_doubles_test test_doubles/test_pucch_res_test_builder_helper.cpp)
 target_link_libraries(scheduler_test_doubles_test
