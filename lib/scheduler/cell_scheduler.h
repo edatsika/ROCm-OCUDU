@@ -12,6 +12,7 @@
 #include "common_scheduling/si_scheduler.h"
 #include "common_scheduling/ssb_scheduler.h"
 #include "config/cell_configuration.h"
+#include "logging/cell_event_tracer.h"
 #include "logging/scheduler_event_logger.h"
 #include "logging/scheduler_result_logger.h"
 #include "pdcch_scheduling/pdcch_resource_allocator_impl.h"
@@ -76,10 +77,11 @@ private:
   cell_resource_allocator res_grid;
 
   /// Logger of cell events and scheduling results.
-  scheduler_event_logger  event_logger;
-  cell_metrics_handler&   metrics;
-  scheduler_result_logger result_logger;
-  ocudulog::basic_logger& logger;
+  scheduler_event_logger                         event_logger;
+  cell_metrics_handler&                          metrics;
+  scheduler_result_logger                        result_logger;
+  std::unique_ptr<schedtrace::cell_event_tracer> cell_tracer;
+  ocudulog::basic_logger&                        logger;
 
   ssb_scheduler                 ssb_sch;
   pdcch_resource_allocator_impl pdcch_sch;
