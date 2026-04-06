@@ -15,6 +15,17 @@ endif (${CMAKE_SOURCE_DIR} STREQUAL ${CMAKE_BINARY_DIR})
 cmake_minimum_required(VERSION 3.14)
 project(ocudu)
 
+# edatsika Activate HIP for AMD ROC m
+if(NOT DEFINED CMAKE_HIP_ARCHITECTURES)
+    set(CMAKE_HIP_ARCHITECTURES "gfx1030")
+endif()
+# flag only in hip compiler
+add_compile_options($<$<COMPILE_LANGUAGE:HIP>:--offload-arch=gfx1030>)
+enable_language(HIP)
+# To find correct libraries when needed
+find_package(hip REQUIRED)
+
+
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall")

@@ -16,6 +16,21 @@ namespace ldpc {
 constexpr unsigned MAX_BG_K = 22;
 } // namespace ldpc
 
+// edatsika
+#ifdef __cplusplus
+extern "C" {
+#endif
+    void ldpc_v2c_subtraction(float* soft, float* c2v, float* v2c, float* v2c_copy, const uint16_t* adj, const uint8_t* off, const uint8_t* len, int Z, int layer, bool init);
+    void ldpc_c2v_min_sum(float* d_v2c, float* d_c2v, const uint16_t* d_adj, const uint16_t* d_shifts,
+                      const uint8_t* d_offsets, const uint8_t* d_lengths,
+                      int lifting_size, int check_node, int total_edges);
+    //void ldpc_c2v_min_sum(float* v2c, float* c2v, const uint16_t* shifts, const uint8_t* off, const uint8_t* len, int Z, int layer);
+    void ldpc_soft_bits_update(float* soft, float* v2c_copy, float* c2v, const uint16_t* adj, const uint16_t* shifts, const uint8_t* off, const uint8_t* len, int Z, int layer);
+#ifdef __cplusplus
+}
+#endif
+
+
 /// Template LDPC decoder
 class ldpc_decoder_impl : public ldpc_decoder
 {
@@ -31,6 +46,12 @@ public:
     force_decoding(cfg_force_decoding), early_stop_syndrome(cfg_early_stop_syndrome)
   {
     ocudu_assert((scaling_factor > 0) && (scaling_factor < 1), "Scaling factor must be between 0 and 1, not included.");
+    
+    // Memory allocated at heap
+    soft_bits.resize(ldpc::MAX_BG_N_FULL * ldpc::MAX_LIFTING_SIZE);
+    var_to_check.resize(2 * MAX_CHECK_NODE_DEGREE * ldpc::MAX_LIFTING_SIZE);
+    check_to_var_flat.resize(ldpc::MAX_BG_M * MAX_CHECK_NODE_DEGREE * ldpc::MAX_LIFTING_SIZE);
+    is_check_to_var_initialized.resize(ldpc::MAX_BG_M, false);
   }
 
   // See interface for the documentation.
@@ -38,7 +59,7 @@ public:
                                  span<const log_likelihood_ratio> input,
                                  crc_calculator*                  crc,
                                  const configuration&             cfg) override;
-
+  virtual ~ldpc_decoder_impl(); // edatsika Free VRAM after decoding
 private:
   /// Initializes the decoder inner variables.
   void init(const configuration& cfg);
@@ -63,13 +84,16 @@ private:
   /// Gets a view to a node soft bits.
   span<log_likelihood_ratio> get_soft_bits(unsigned i_node)
   {
+    //return span<log_likelihood_ratio>(soft_bits).subspan(i_node * node_size_byte, node_size_byte);
     return span<log_likelihood_ratio>(soft_bits).subspan(i_node * node_size_byte, node_size_byte);
   }
 
   /// Gets a view to the check-to-var message from layer (check node) \c i_layer to variable node \c i_node.
   span<log_likelihood_ratio> get_check_to_var(unsigned i_layer, unsigned i_node)
   {
-    return span<log_likelihood_ratio>(check_to_var[i_layer]).subspan(i_node * node_size_byte, node_size_byte);
+    //return span<log_likelihood_ratio>(check_to_var[i_layer]).subspan(i_node * node_size_byte, node_size_byte);
+    size_t offset = (i_layer * MAX_CHECK_NODE_DEGREE * ldpc::MAX_LIFTING_SIZE) + (i_node * node_size_byte);
+    return span<log_likelihood_ratio>(check_to_var_flat).subspan(offset, node_size_byte);
   }
 
   /// Gets a view to the variable-to-check message from variable node \c i_node to the current layer (check node) after
@@ -173,6 +197,8 @@ private:
   /// \return True if the syndrome check is positive: the codeblock satisfies all parity checks and the syndrome is
   /// zero. False, otherwise.
   bool check_syndrome() const;
+  
+  //virtual ~ldpc_decoder_impl(); // edatsika Free VRAM after decoding
 
 protected:
   /// Number of base graph variable nodes corresponding to information bits.
@@ -185,7 +211,8 @@ protected:
   float scaling_factor = 0.8;
 
   /// Buffer to store the current value of the soft bits.
-  std::array<log_likelihood_ratio, static_cast<size_t>(ldpc::MAX_BG_N_FULL* ldpc::MAX_LIFTING_SIZE)> soft_bits;
+  //std::array<log_likelihood_ratio, static_cast<size_t>(ldpc::MAX_BG_N_FULL* ldpc::MAX_LIFTING_SIZE)> soft_bits;
+   std::vector<log_likelihood_ratio> soft_bits;
 
 private:
   /// Soft bits clamp lower bound.
@@ -217,23 +244,47 @@ private:
   bool force_decoding;
   /// Use the LDPC syndrome as an early stop mechanism. Note the syndrome is ignored if the CRC calculator is provided.
   bool early_stop_syndrome;
+  
+  //edatsika
+  std::vector<uint16_t> h_adj_data; 
+  std::vector<uint16_t> h_shifts; // Host data (CPU)
+  uint16_t* d_shifts = nullptr;// Device pointer (GPU)
+  
+  float* d_soft_bits = nullptr;
+  float* d_c2v = nullptr;
+  float* d_v2c = nullptr;
+  float* d_v2c_copy = nullptr;
+  
+  uint16_t* d_adj_matrix = nullptr;
+  uint8_t* d_row_offsets = nullptr;
+  uint8_t* d_row_lengths = nullptr;
 
+  unsigned  total_edges  = 0;
+  
+  //edatsika free mem when new LS is tested?
+  //uint16_t last_ls = 0;
+  ldpc_base_graph_type last_bg = (ldpc_base_graph_type)99; // dummy value
+  
   /// \brief Buffer to store the current value of the variable-to-check messages.
   ///
   /// Implementing a layered-based algorithm, we only need to store the variable-to-check messages corresponding
   /// to the current (base graph) check node.
   /// \remark The factor 2 stems from the fact that we store two copies of all messages to facilitate their circular
   ///         shift.
-  std::array<log_likelihood_ratio, static_cast<size_t>(2 * MAX_CHECK_NODE_DEGREE * ldpc::MAX_LIFTING_SIZE)>
-      var_to_check = {};
+  
+  //std::array<log_likelihood_ratio, static_cast<size_t>(2 * MAX_CHECK_NODE_DEGREE * ldpc::MAX_LIFTING_SIZE)>
+  //    var_to_check = {};
+  std::vector<log_likelihood_ratio> var_to_check;
 
   /// Buffer to store the current value of the check-to-variable messages.
-  std::array<std::array<log_likelihood_ratio, static_cast<size_t>(MAX_CHECK_NODE_DEGREE* ldpc::MAX_LIFTING_SIZE)>,
+  /*std::array<std::array<log_likelihood_ratio, static_cast<size_t>(MAX_CHECK_NODE_DEGREE* ldpc::MAX_LIFTING_SIZE)>,
              ldpc::MAX_BG_M>
-      check_to_var;
+      check_to_var;*/
+  std::vector<log_likelihood_ratio> check_to_var_flat;
 
   /// Initialization flags of check-to-variable messages: true if initialized.
-  std::array<bool, ldpc::MAX_BG_M> is_check_to_var_initialized;
+  //std::array<bool, ldpc::MAX_BG_M> is_check_to_var_initialized;
+   std::vector<bool> is_check_to_var_initialized;
 };
 
 } // namespace ocudu

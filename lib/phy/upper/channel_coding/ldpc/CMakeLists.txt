@@ -14,6 +14,10 @@ set(ldpc_sources
         ldpc_rate_dematcher_impl.cpp
         ldpc_segmenter_tx_impl.cpp
         ldpc_segmenter_rx_impl.cpp
+        # Add kernels edatsika
+        ldpc_v2c_subtraction.hip
+        ldpc_c2v_min_sum.hip
+        ldpc_soft_bits_update.hip
         )
 
 if (${CMAKE_SYSTEM_PROCESSOR} MATCHES "x86_64")
@@ -38,4 +42,22 @@ endif (${CMAKE_SYSTEM_PROCESSOR} MATCHES "aarch64")
 
 add_library(ocudu_ldpc STATIC ${ldpc_sources})
 
-target_link_libraries(ocudu_ldpc log_likelihood_ratio)
+# edatsika
+#set_target_properties(ocudu_ldpc PROPERTIES LINKER_LANGUAGE HIP)
+
+#edatsika
+target_include_directories(ocudu_ldpc PUBLIC 
+    ${PROJECT_SOURCE_DIR}/lib
+    ${PROJECT_SOURCE_DIR}       # ΑΥΤΟ ΕΠΙΤΡΕΠΕΙ ΤΟ #include "ocudu/..."
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    /opt/rocm/include
+)
+
+
+#target_link_libraries(ocudu_ldpc log_likelihood_ratio)
+# edatsika linking with HIP
+target_link_libraries(ocudu_ldpc PUBLIC 
+    hip::host 
+    hip::device 
+    log_likelihood_ratio
+)
