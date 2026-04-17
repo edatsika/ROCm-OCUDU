@@ -15,9 +15,10 @@ set(ldpc_sources
         ldpc_segmenter_tx_impl.cpp
         ldpc_segmenter_rx_impl.cpp
         # Add kernels edatsika
-        ldpc_v2c_subtraction.hip
-        ldpc_c2v_min_sum.hip
-        ldpc_soft_bits_update.hip
+        fused_kernel.hip
+        #ldpc_v2c_subtraction.hip
+        #ldpc_c2v_min_sum.hip
+        #ldpc_soft_bits_update.hip
         )
 
 if (${CMAKE_SYSTEM_PROCESSOR} MATCHES "x86_64")
@@ -48,7 +49,7 @@ add_library(ocudu_ldpc STATIC ${ldpc_sources})
 #edatsika
 target_include_directories(ocudu_ldpc PUBLIC 
     ${PROJECT_SOURCE_DIR}/lib
-    ${PROJECT_SOURCE_DIR}       # ΑΥΤΟ ΕΠΙΤΡΕΠΕΙ ΤΟ #include "ocudu/..."
+    ${PROJECT_SOURCE_DIR}       # Allow #include "ocudu/..."
     ${CMAKE_CURRENT_SOURCE_DIR}
     /opt/rocm/include
 )

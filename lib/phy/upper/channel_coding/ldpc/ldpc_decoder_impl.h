@@ -20,12 +20,11 @@ constexpr unsigned MAX_BG_K = 22;
 #ifdef __cplusplus
 extern "C" {
 #endif
-    void ldpc_v2c_subtraction(float* soft, float* c2v, float* v2c, float* v2c_copy, const uint16_t* adj, const uint8_t* off, const uint8_t* len, int Z, int layer, bool init);
-    void ldpc_c2v_min_sum(float* d_v2c, float* d_c2v, const uint16_t* d_adj, const uint16_t* d_shifts,
-                      const uint8_t* d_offsets, const uint8_t* d_lengths,
-                      int lifting_size, int check_node, int total_edges);
-    //void ldpc_c2v_min_sum(float* v2c, float* c2v, const uint16_t* shifts, const uint8_t* off, const uint8_t* len, int Z, int layer);
-    void ldpc_soft_bits_update(float* soft, float* v2c_copy, float* c2v, const uint16_t* adj, const uint16_t* shifts, const uint8_t* off, const uint8_t* len, int Z, int layer);
+    void ldpc_process_layer_fused(
+    float* d_soft_bits, float* d_c2v,
+    const uint16_t* d_adj, const uint16_t* d_shifts,
+    const uint8_t* d_offsets, const uint8_t* d_lengths,
+    int lifting_size, int check_node, bool is_initialized);
 #ifdef __cplusplus
 }
 #endif

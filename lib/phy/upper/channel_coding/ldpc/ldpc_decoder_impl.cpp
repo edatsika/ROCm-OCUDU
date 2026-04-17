@@ -218,14 +218,12 @@ if (current_ls_bytes > soft_bits.size() * sizeof(log_likelihood_ratio)) {
   for (unsigned i_iteration = 0; i_iteration != max_iterations; ++i_iteration) {
     // Run all layers
     for (unsigned i_layer = 0; i_layer != nof_layers; ++i_layer) {
-      update_variable_to_check_messages(i_layer);
-      //CHECK_HIP(hipDeviceSynchronize());
-
-      update_check_to_variable_messages(i_layer);
-      //CHECK_HIP(hipDeviceSynchronize());
-
-      update_soft_bits(i_layer);
-      //CHECK_HIP(hipDeviceSynchronize());
+    ldpc_process_layer_fused(d_soft_bits, d_c2v, 
+                             d_adj_matrix, d_shifts, d_row_offsets, d_row_lengths,
+                             lifting_size, i_layer, 
+                             is_check_to_var_initialized[i_layer]);
+                             
+    is_check_to_var_initialized[i_layer] = true;
     }
 
   //edatsika bring back results for CRC check
@@ -331,7 +329,7 @@ void ldpc_decoder_impl::load_soft_bits(span<const log_likelihood_ratio> llrs, un
 }
 
 // edatsika replace with kernel, this is after extern c
-void ldpc_decoder_impl::update_variable_to_check_messages(unsigned i_layer) 
+/*void ldpc_decoder_impl::update_variable_to_check_messages(unsigned i_layer) 
 {
     ldpc_v2c_subtraction(d_soft_bits, 
                            d_c2v, 
@@ -343,10 +341,10 @@ void ldpc_decoder_impl::update_variable_to_check_messages(unsigned i_layer)
                            lifting_size, 
                            i_layer, 
                            is_check_to_var_initialized[i_layer]);
-}
+}*/
 
 // edatsika  this is after extern c
-void ldpc_decoder_impl::update_soft_bits(unsigned i_layer) 
+/*void ldpc_decoder_impl::update_soft_bits(unsigned i_layer) 
 {
     ldpc_soft_bits_update(d_soft_bits, 
                             d_v2c_copy, 
@@ -374,7 +372,7 @@ void ldpc_decoder_impl::update_check_to_variable_messages(unsigned i_layer)
                      total_edges); // new
     
     is_check_to_var_initialized[i_layer] = true;
-}
+}*/
 
 
 bool ldpc_decoder_impl::get_hard_bits(bit_buffer& out) const
