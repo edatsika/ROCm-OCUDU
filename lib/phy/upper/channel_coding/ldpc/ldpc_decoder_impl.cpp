@@ -114,15 +114,15 @@ void ldpc_decoder_impl::init(const configuration& cfg)
       CHECK_HIP(hipMalloc(&d_shifts, h_shifts.size() * sizeof(uint16_t)));
       CHECK_HIP(hipMemcpy(d_shifts, h_shifts.data(), h_shifts.size() * sizeof(uint16_t), hipMemcpyHostToDevice));
 
-      std::cout << "--- GPU Re-Init [BG=" << (cfg.base_graph == ldpc_base_graph_type::BG1 ? "1":"2") 
-                << ", LS=" << lifting_size << "] ---" << std::endl;
+    /*  std::cout << "--- GPU Re-Init [BG=" << (cfg.base_graph == ldpc_base_graph_type::BG1 ? "1":"2") 
+                << ", LS=" << lifting_size << "] ---" << std::endl;*/
         
-        printf("DEBUG: LS=%d, total_edges=%u, h_adj_data.size=%zu\n", 
-        lifting_size, total_edges, h_adj_data.size());
-        size_t msg_bytes = (size_t)total_edges * lifting_size * sizeof(float);
+        /*printf("DEBUG: LS=%d, total_edges=%u, h_adj_data.size=%zu\n", 
+        lifting_size, total_edges, h_adj_data.size()); */
+        /*size_t msg_bytes = (size_t)total_edges * lifting_size * sizeof(float);
         printf("DEBUG MALLOC: total_edges=%u, LS=%u, bytes=%zu\n", total_edges, lifting_size, msg_bytes);
         printf("DEBUG: bg_M=%u, h_offsets.size=%zu, h_lengths.size=%zu\n", 
-        bg_M, h_offsets.size(), h_lengths.size());
+        bg_M, h_offsets.size(), h_lengths.size());*/
 
   }
   
@@ -176,7 +176,7 @@ std::optional<unsigned> ldpc_decoder_impl::decode(bit_buffer&                   
   //printf("DEBUG: After std::fill\n");
 
   load_soft_bits(input, input_size);
-  printf("DEBUG: After load_soft_bits\n");
+ // printf("DEBUG: After load_soft_bits\n");
 
   // The minimum codeblock length is message_length + four times the lifting size
   // (that is, the length of the high-rate region).
@@ -196,11 +196,11 @@ std::optional<unsigned> ldpc_decoder_impl::decode(bit_buffer&                   
   unsigned nof_layers = codeblock_length / lifting_size - bg_K;
   
   //edatsika send LLRs to GPU
-  size_t safe_copy_size = (bg_N_full * lifting_size) * sizeof(float);
+  /*size_t safe_copy_size = (bg_N_full * lifting_size) * sizeof(float);
   printf("--- Copy Debug ---\n");
   printf("d_soft_bits: %p\n", (void*)d_soft_bits);
   printf("soft_bits.data(): %p\n", (void*)soft_bits.data());
-  printf("safe_copy_size(): %zu\n", safe_copy_size);
+  printf("safe_copy_size(): %zu\n", safe_copy_size);*/
   //printf("Total bytes: %zu\n", soft_bits.size() * sizeof(float));
   
   // Calc bits related to current LS only
@@ -229,14 +229,14 @@ if (current_ls_bytes > soft_bits.size() * sizeof(log_likelihood_ratio)) {
   //edatsika bring back results for CRC check
   CHECK_HIP(hipMemcpy(soft_bits.data(), d_soft_bits, current_ls_bytes, hipMemcpyDeviceToHost));
 
-printf("--- GPU Return Debug [LS=%d] ---\n", lifting_size);
+//printf("--- GPU Return Debug [LS=%d] ---\n", lifting_size);
 // Cast to read bytes directly
-int8_t* raw_ptr = reinterpret_cast<int8_t*>(soft_bits.data());
+/*int8_t* raw_ptr = reinterpret_cast<int8_t*>(soft_bits.data());
 
 for (int i = 0; i < 16; ++i) {
     printf("%d ", (int)raw_ptr[i]); // Print int LLR (-128 to 127)
 }
-printf("\n-------------------------------\n");
+printf("\n-------------------------------\n");*/
 
     // If a CRC calculator was passed with the configuration parameters
     if (crc != nullptr) {
@@ -325,7 +325,7 @@ void ldpc_decoder_impl::load_soft_bits(span<const log_likelihood_ratio> llrs, un
     }
   }
   
-  printf("DEBUG: load_soft_bits finished successfully\n");
+  //printf("DEBUG: load_soft_bits finished successfully\n");
 }
 
 // edatsika replace with kernel, this is after extern c

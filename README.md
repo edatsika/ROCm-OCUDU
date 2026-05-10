@@ -80,6 +80,19 @@ Trace generated as follows:
    cd ~/ROCm-OCUDU/tests/benchmarks/phy/upper/channel_coding/ldpc/
    rocprofv3 --hip-trace --kernel-trace --output-format pftrace -- ./ldpc_decoder_benchmark -L 384
    ```
+
+The profiling results indicate that the system is heavily communication-bound, with the GPU remaining idle for nearly 60% of the total execution time. This high idle percentage is a direct consequence of the synchronous host-device communication and the serial nature of the layer-by-layer kernel dispatch. With a lifting size of 384, the computational workload per kernel (~45 μs) is insufficient to hide the launch overhead and the significant inter-kernel gaps (up to 307 μs), leading to the observed throughput stalls at the tail percentiles.
+
+To extract the GPU utilization metrics, the following query was used:
+```bash
+SELECT 
+    ((total.total_dur - active.active_dur) * 100.0 / total.total_dur) AS idle_percentage,
+    (active.active_dur * 100.0 / total.total_dur) AS active_percentage
+FROM 
+    (SELECT (MAX(ts + dur) - MIN(ts)) as total_dur FROM slice WHERE name LIKE 'ldpc%') AS total,
+    (SELECT SUM(dur) as active_dur FROM slice WHERE name LIKE 'ldpc%') AS active;
+```
+
 ### Next Steps
 - **Multi-codeword batching:** Combine multiple codewords (e.g., batch size = 32 or 64) into a single kernel launch to fill all 16 CUs and hide CPU launch latency.
 - **Asynchronous pipeline (HIP Streams):** Use hipStream_t and hipMemcpyAsync to overlap data transfers with kernel execution. While the GPU is decoding batch n, the PCIe bus will be transferring batch N+1.
