@@ -14,11 +14,11 @@ set(ldpc_sources
         ldpc_rate_dematcher_impl.cpp
         ldpc_segmenter_tx_impl.cpp
         ldpc_segmenter_rx_impl.cpp
-        # Add kernels edatsika
-        fused_kernel.hip
-        #ldpc_v2c_subtraction.hip
-        #ldpc_c2v_min_sum.hip
-        #ldpc_soft_bits_update.hip
+	# edatsika
+        # Add HIP implementation files
+        ldpc_decoder_hip.cpp             
+        batched_fused_kernel.hip         
+        ldpc_syndrome_check_kernel.hip    
         )
 
 if (${CMAKE_SYSTEM_PROCESSOR} MATCHES "x86_64")
@@ -62,3 +62,11 @@ target_link_libraries(ocudu_ldpc PUBLIC
     hip::device 
     log_likelihood_ratio
 )
+
+# Added for batched fused kernel implementation as new decoder type
+set_source_files_properties(ldpc_decoder_hip.cpp PROPERTIES LANGUAGE HIP)
+set_source_files_properties(batched_fused_kernel.hip PROPERTIES LANGUAGE HIP)
+set_source_files_properties(ldpc_syndrome_check_kernel.hip PROPERTIES LANGUAGE HIP)
+set_source_files_properties(ldpc_decoder_impl.cpp PROPERTIES LANGUAGE HIP) 
+target_compile_definitions(ocudu_ldpc PUBLIC GPU_HIP) # or private?
+#target_compile_definitions(ocudu_ldpc PUBLIC BATCH_SIZE=256)

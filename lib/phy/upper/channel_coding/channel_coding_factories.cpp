@@ -38,6 +38,11 @@
 #include "ldpc/ldpc_rate_dematcher_neon_impl.h"
 #endif // __ARM_NEON
 
+// edatsika: Added HIP include
+#ifdef GPU_HIP
+#include "ldpc/ldpc_decoder_hip.h"
+#endif
+
 using namespace ocudu;
 
 namespace {
@@ -70,13 +75,8 @@ public:
     }
 #endif // __aarch64__
 
-    if ((type == "auto") || (type == "lut")) {
-      return std::make_unique<crc_calculator_lut_impl>(poly);
-    }
-
     return nullptr;
-  }
-
+}
 private:
   std::string type;
 };
@@ -113,6 +113,17 @@ public:
       return std::make_unique<ldpc_decoder_neon>(cfg.force_decoding, cfg.early_stop_syndrome);
     }
 #endif // __aarch64__
+//edatsika
+#ifdef GPU_HIP
+    if (dec_type == "hip") {
+      printf("\n>>> FACTORY: CREATING HIP DECODER <<<\n");
+      return std::make_unique<ldpc_decoder_hip>(cfg.force_decoding, cfg.early_stop_syndrome);
+    }
+#else
+    if (dec_type == "hip") {
+      printf("\n>>> FACTORY ERROR: 'hip' type requested but GPU_HIP is NOT defined! <<<\n");
+    }
+#endif 
     if ((dec_type == "auto") || (dec_type == "generic")) {
       return std::make_unique<ldpc_decoder_generic>(cfg.force_decoding, cfg.early_stop_syndrome);
     }
@@ -267,6 +278,7 @@ std::shared_ptr<ldpc_decoder_factory>
 ocudu::create_ldpc_decoder_factory_sw(const std::string&                                              dec_type,
                                       const ldpc_decoder_factory::ldpc_decoder_factory_configuration& cfg)
 {
+  printf("DEBUG: ldpc_decoder_factory_sw::create() called for type: %s\n", dec_type.c_str());
   return std::make_unique<ldpc_decoder_factory_sw>(dec_type, cfg);
 }
 
@@ -297,10 +309,11 @@ std::shared_ptr<ldpc_segmenter_rx_factory> ocudu::create_ldpc_segmenter_rx_facto
   return std::make_shared<ldpc_segmenter_rx_factory_sw>();
 }
 
-std::shared_ptr<crc_calculator_factory> ocudu::create_crc_calculator_factory_sw(const std::string& type)
+std::shared_ptr<crc_calculator_factory> create_crc_calculator_factory_sw(const std::string& type)
 {
   return std::make_shared<crc_calculator_factory_sw_impl>(type);
 }
+
 
 std::shared_ptr<polar_factory> ocudu::create_polar_factory_sw()
 {
@@ -311,3 +324,4 @@ std::shared_ptr<short_block_detector_factory> ocudu::create_short_block_detector
 {
   return std::make_unique<short_block_detector_factory_sw>();
 }
+

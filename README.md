@@ -93,8 +93,38 @@ FROM
     (SELECT SUM(dur) as active_dur FROM slice WHERE name LIKE 'ldpc%') AS active;
 ```
 
+
+*   **Batching implementation - no streams**
+
+A **multi-codeword batching** strategy was implemented, consolidating 256 parallel codewords into a single kernel dispatch. Although throughput scales up to 13.0x, the profile also exposes a batch-serial synchronization issue, where the system spends almost 80% of its time on host-side formatting. As the execution pipeline is currently single-stream, the GPU remains completely starved during the large inter-batch gaps while the CPU sequentially processes the heavy interleave() memory layout transformation for the subsequent batch.
+
+
+| Configuration | Device | 50th | 75th | 90th | 99th | 99.9th | 99.99th | Worst |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| **BG1, LS=384, R=0.917** | GPU | 62.0 | 61.2 | 60.3 | 58.6 | 44.1 | 44.1 | 44.1 |
+| **BG1, LS=384, R=0.333** | GPU | 60.8 | 60.2 | 59.6 | 59.0 | 56.7 | 56.7 | 56.7 |
+| **BG2, LS=384, R=0.833** | GPU | 39.7 | 39.1 | 38.3 | 37.6 | 35.1 | 35.1 | 35.1 |
+| **BG2, LS=384, R=0.200** | GPU | 39.0 | 38.6 | 37.7 | 36.8 | 32.0 | 32.0 | 32.0 |
+
+Based on the data from the `XXXXX_agent_info.csv` file, generated with the command:
+```bash
+rocprofv3 --hip-trace --sys-trace --stats --output-format csv -- ./ldpc_decoder_benchmark -L 384 -T hip
+```
+
+the ROCm runtime confirms the following hardware specifications and execution analysis:
+The kernel was restricted to a single block, utilizing only 1 out of the 16 available CUs on the AMD RX 6500 XT in the initial version. By batching 256 codewords, the grid size expands sufficiently to saturate all 16 CUs simultaneously. The GPU operates in Wave32 mode. A 256-thread block divides into exactly 8 waves. A workload of 384 blocks results in 24 blocks assigned per CU. Each CU accommodates a maximum of 1024 concurrent threads (32 waves x 32 threads). This allows up to 4 blocks to be in-flight simultaneously (4 x 256 threads = 1024). With 24 blocks requiring 192 total waves (24 x 8), and a maximum capacity of 32 waves per CU, the GPU scheduler can execute the workload in 6 consecutive execution waves,provided that the kernel's internal register usage (VGPRs) or LDS usage is low enough to not artificially lower this capacity.
+
+While the hipMemcpyAsync calls are non-blocking, the hardcoded hipStreamSynchronize at the end of decode_batch() forces a strict sequential dependency: Host preparation (interleave) --> GPU kernel execution --> Host synchronization. As only one stream lane (track_id = 0) is used, the CPU cannot begin interleaving data for Batch \(N+1\) until the GPU completely finishes and synchronizes Batch \(N\). The system is no longer bottlenecked by raw GPU execution, but by host-side memory preparation stalls, validating the need for an asynchronous multi-stream pipeline.
+
+<p align="center">
+  <img src="docs/traces/trace-serial-batched-fused-L-384-GPU.png" alt="Perfetto Trace" width="900">
+  <br>
+  <em>Figure 1: Perfetto trace showing the Batch-Serial synchronization bottleneck. The host CPU (main thread) enters a blocking state inside hipStreamSynchronize (brown bar) and remains entirely stalled, waiting for the GPU to complete the execution of the heavy ldpc_fused_layer_kernel (purple bar on STREAM ["1"]).</em>
+</p>
+
+
+
 ### Next Steps
-- **Multi-codeword batching:** Combine multiple codewords (e.g., batch size = 32 or 64) into a single kernel launch to fill all 16 CUs and hide CPU launch latency.
-- **Asynchronous pipeline (HIP Streams):** Use hipStream_t and hipMemcpyAsync to overlap data transfers with kernel execution. While the GPU is decoding batch n, the PCIe bus will be transferring batch N+1.
+- **Asynchronous pipeline (HIP Streams):** Use hipStream_t and hipMemcpyAsync to overlap data transfers with kernel execution. While the GPU is decoding batch N, the PCIe bus will be transferring batch N+1.
 - **Local data share (LDS) Optimization:** Move LLR data from registers to LDS in order to allow more batches to run concurrently per CU.
 

@@ -10,24 +10,14 @@
 #include "ocudu/ocuduvec/fill.h"
 #include "ocudu/ocuduvec/zero.h"
 #include "ocudu/support/ocudu_assert.h"
-#include <hip/hip_runtime.h>
-#include <iostream>
-
-// edatsika
-#define CHECK_HIP(cmd) \
-{ \
-    hipError_t error = cmd; \
-    if (error != hipSuccess) { \
-        fprintf(stderr, "HIP Error: %s at %s:%d\n", hipGetErrorString(error), __FILE__, __LINE__); \
-        exit(EXIT_FAILURE); \
-    } \
-}
 
 using namespace ocudu;
 using namespace ocudu::ldpc;
 
 void ldpc_decoder_impl::init(const configuration& cfg)
 {
+    printf("original init = \n");
+  
   uint8_t  pos   = get_lifting_size_position(cfg.lifting_size);
   unsigned skip  = (cfg.base_graph == ldpc_base_graph_type::BG2) ? NOF_LIFTING_SIZES : 0;
   current_graph  = &graph_array[skip + pos];
@@ -37,8 +27,7 @@ void ldpc_decoder_impl::init(const configuration& cfg)
   bg_K           = current_graph->get_nof_BG_info_nodes();
   bg_N_high_rate = bg_K + 4;
   ocudu_assert(bg_K == bg_N_full - bg_M, "Invalid bg_K value '{}'", bg_K);
-  
-  uint16_t new_lifting_size = static_cast<uint16_t>(cfg.lifting_size);
+  lifting_size = static_cast<uint16_t>(cfg.lifting_size);
 
   max_iterations = cfg.max_iterations;
   ocudu_assert(max_iterations > 0, "Max iterations must be different to 0");
@@ -46,88 +35,10 @@ void ldpc_decoder_impl::init(const configuration& cfg)
   unsigned nof_crc_bits = cfg.nof_crc_bits;
   ocudu_assert((nof_crc_bits == 16) || (nof_crc_bits == 24), "Invalid number of CRC bits.");
 
-  nof_significant_bits = bg_K * new_lifting_size - cfg.nof_filler_bits;
+  nof_significant_bits = bg_K * lifting_size - cfg.nof_filler_bits;
 
   specific_init();
-
-  // --- edatsika GPU RE-INITIALIZATION ONLY ON CHANGE ---
-  // Have LS or BG changed?
-  if (new_lifting_size != lifting_size || cfg.base_graph != last_bg) {
-      
-      if (d_soft_bits != nullptr) {
-            CHECK_HIP(hipFree(d_soft_bits)); d_soft_bits = nullptr;
-            CHECK_HIP(hipFree(d_c2v));       d_c2v = nullptr;
-            CHECK_HIP(hipFree(d_v2c));       d_v2c = nullptr;
-            CHECK_HIP(hipFree(d_v2c_copy));  d_v2c_copy = nullptr;
-            CHECK_HIP(hipFree(d_adj_matrix)); d_adj_matrix = nullptr;
-            CHECK_HIP(hipFree(d_row_offsets)); d_row_offsets = nullptr;
-            CHECK_HIP(hipFree(d_row_lengths)); d_row_lengths = nullptr;
-            CHECK_HIP(hipFree(d_shifts));      d_shifts = nullptr;
-      }
-
-      // Update pars
-      lifting_size = new_lifting_size;
-      last_bg      = cfg.base_graph;
-
-      // Prepare data at host
-      total_edges = 0;
-      std::vector<uint8_t> h_offsets;
-      std::vector<uint8_t> h_lengths;
-      h_adj_data.clear();
-      h_shifts.clear();
-
-      for (unsigned i = 0; i < bg_M; ++i) {
-          const auto& row = current_graph->get_adjacency_row(i);
-          h_offsets.push_back(static_cast<uint8_t>(h_adj_data.size()));
-          
-          unsigned row_len = 0;
-          for (auto node_idx : row) {
-              if (node_idx == NO_EDGE || node_idx >= bg_N_high_rate) break;
-              h_adj_data.push_back(static_cast<uint16_t>(node_idx));
-    
-              // Adapt shift to current Z
-              //Check next 2 lines
-              //uint16_t raw_shift = current_graph->get_lifted_node(i, node_idx);
-              //h_shifts.push_back(raw_shift % lifting_size);
-              h_shifts.push_back(current_graph->get_lifted_node(i, node_idx) % lifting_size);
-              row_len++;
-          }
-          h_lengths.push_back(static_cast<uint8_t>(row_len));
-          total_edges += row_len;
-      }
-
-      // New GPU allocations
-      CHECK_HIP(hipMalloc(&d_soft_bits, (bg_N_full * lifting_size) * sizeof(float)));
-      CHECK_HIP(hipMalloc(&d_c2v, (total_edges * lifting_size) * sizeof(float)));
-      CHECK_HIP(hipMalloc(&d_v2c, (total_edges * lifting_size) * sizeof(float)));
-      CHECK_HIP(hipMalloc(&d_v2c_copy, (total_edges * lifting_size) * sizeof(float)));
-
-      CHECK_HIP(hipMalloc(&d_adj_matrix, h_adj_data.size() * sizeof(uint16_t)));
-      CHECK_HIP(hipMemcpy(d_adj_matrix, h_adj_data.data(), h_adj_data.size() * sizeof(uint16_t), hipMemcpyHostToDevice));
-
-      CHECK_HIP(hipMalloc(&d_row_offsets, h_offsets.size() * sizeof(uint8_t)));
-      CHECK_HIP(hipMemcpy(d_row_offsets, h_offsets.data(), h_offsets.size() * sizeof(uint8_t), hipMemcpyHostToDevice));
-
-      CHECK_HIP(hipMalloc(&d_row_lengths, h_lengths.size() * sizeof(uint8_t)));
-      CHECK_HIP(hipMemcpy(d_row_lengths, h_lengths.data(), h_lengths.size() * sizeof(uint8_t), hipMemcpyHostToDevice));
-
-      CHECK_HIP(hipMalloc(&d_shifts, h_shifts.size() * sizeof(uint16_t)));
-      CHECK_HIP(hipMemcpy(d_shifts, h_shifts.data(), h_shifts.size() * sizeof(uint16_t), hipMemcpyHostToDevice));
-
-    /*  std::cout << "--- GPU Re-Init [BG=" << (cfg.base_graph == ldpc_base_graph_type::BG1 ? "1":"2") 
-                << ", LS=" << lifting_size << "] ---" << std::endl;*/
-        
-        /*printf("DEBUG: LS=%d, total_edges=%u, h_adj_data.size=%zu\n", 
-        lifting_size, total_edges, h_adj_data.size()); */
-        /*size_t msg_bytes = (size_t)total_edges * lifting_size * sizeof(float);
-        printf("DEBUG MALLOC: total_edges=%u, LS=%u, bytes=%zu\n", total_edges, lifting_size, msg_bytes);
-        printf("DEBUG: bg_M=%u, h_offsets.size=%zu, h_lengths.size=%zu\n", 
-        bg_M, h_offsets.size(), h_lengths.size());*/
-
-  }
-  
 }
-
 
 std::optional<unsigned> ldpc_decoder_impl::decode(bit_buffer&                      output,
                                                   span<const log_likelihood_ratio> input,
@@ -161,112 +72,73 @@ std::optional<unsigned> ldpc_decoder_impl::decode(bit_buffer&                   
   // Determine input length.
   unsigned input_size = std::distance(input.begin(), last);
 
-  // The input meaningful number of bits must contain the msg length number of bits to decode the codeblock
+  // The input meaningful number of bits must contain the message length number of bits to successfully decode the
+  // codeblock.
   if ((input_size < message_length) && force_decoding) {
-    // If the codeblock CRC check is external, set all bits to one (so that the CRC will fail)
+    // If the codeblock CRC check is external, set all bits to one (so that the CRC will fail).
     if (crc == nullptr) {
       output.one();
     }
     return std::nullopt;
   }
 
-  // Ensure c2v msgs are not initialized
-  //printf("DEBUG: Before std::fill\n");
+  // Ensure check-to-variable messages are not initialized.
   std::fill(is_check_to_var_initialized.begin(), is_check_to_var_initialized.end(), false);
-  //printf("DEBUG: After std::fill\n");
 
   load_soft_bits(input, input_size);
- // printf("DEBUG: After load_soft_bits\n");
 
   // The minimum codeblock length is message_length + four times the lifting size
   // (that is, the length of the high-rate region).
   uint16_t min_codeblock_length = message_length + 4 * lifting_size;
-  // The decoder works with at least min_codeblock_length bits. The encoder also shortens
-  // the codeblock by 2 * lifting size before returning it as output
+  // The decoder works with at least min_codeblock_length bits. Recall that the encoder also shortens
+  // the codeblock by 2 * lifting size before returning it as output.
   codeblock_length = std::max(input_size + 2UL * lifting_size, static_cast<size_t>(min_codeblock_length));
   // The decoder works with a codeblock length that is a multiple of the lifting size.
   if (codeblock_length % lifting_size != 0) {
     codeblock_length = (codeblock_length / lifting_size + 1) * lifting_size;
   }
 
-  // Layered LDPC decoding: Layers depend on the previous layer but within a layer, many operations are parallel.
-  // GPU parallelization should focus inside each layer, not across layers.
-
- // GENERAL DECODING LOOP
   unsigned nof_layers = codeblock_length / lifting_size - bg_K;
-  
-  //edatsika send LLRs to GPU
-  /*size_t safe_copy_size = (bg_N_full * lifting_size) * sizeof(float);
-  printf("--- Copy Debug ---\n");
-  printf("d_soft_bits: %p\n", (void*)d_soft_bits);
-  printf("soft_bits.data(): %p\n", (void*)soft_bits.data());
-  printf("safe_copy_size(): %zu\n", safe_copy_size);*/
-  //printf("Total bytes: %zu\n", soft_bits.size() * sizeof(float));
-  
-  // Calc bits related to current LS only
-  //to put back: size_t current_ls_bytes = (bg_N_full * lifting_size) * sizeof(float);
-  //Boundary check to be removed
-  size_t current_ls_bytes = (bg_N_full * lifting_size) * sizeof(log_likelihood_ratio);
-if (current_ls_bytes > soft_bits.size() * sizeof(log_likelihood_ratio)) {
-    printf("FATAL: current_ls_bytes (%zu) > soft_bits capacity (%zu)\n", 
-            current_ls_bytes, soft_bits.size() * sizeof(log_likelihood_ratio));
-    return std::nullopt;
-}
-
-  CHECK_HIP(hipMemcpy(d_soft_bits, soft_bits.data(), current_ls_bytes, hipMemcpyHostToDevice));
 
   for (unsigned i_iteration = 0; i_iteration != max_iterations; ++i_iteration) {
-    // Run all layers
+    // Run all layers.
     for (unsigned i_layer = 0; i_layer != nof_layers; ++i_layer) {
-    ldpc_process_layer_fused(d_soft_bits, d_c2v, 
-                             d_adj_matrix, d_shifts, d_row_offsets, d_row_lengths,
-                             lifting_size, i_layer, 
-                             is_check_to_var_initialized[i_layer]);
-                             
-    is_check_to_var_initialized[i_layer] = true;
+      update_variable_to_check_messages(i_layer);
+
+      update_check_to_variable_messages(i_layer);
+
+      update_soft_bits(i_layer);
     }
 
-  //edatsika bring back results for CRC check
-  CHECK_HIP(hipMemcpy(soft_bits.data(), d_soft_bits, current_ls_bytes, hipMemcpyDeviceToHost));
-
-//printf("--- GPU Return Debug [LS=%d] ---\n", lifting_size);
-// Cast to read bytes directly
-/*int8_t* raw_ptr = reinterpret_cast<int8_t*>(soft_bits.data());
-
-for (int i = 0; i < 16; ++i) {
-    printf("%d ", (int)raw_ptr[i]); // Print int LLR (-128 to 127)
-}
-printf("\n-------------------------------\n");*/
-
-    // If a CRC calculator was passed with the configuration parameters
+    // If a CRC calculator was passed with the configuration parameters.
     if (crc != nullptr) {
-      // Get hard bits
+      // Get hard bits.
       bool hard_bits_success = get_hard_bits(output);
 
-      // Early stop condition: CRC check must be zero
+      // Early stop condition: CRC check must be zero.
       if (hard_bits_success && crc->calculate(output.first(nof_significant_bits)) == 0) {
         return i_iteration + 1;
       }
     } else if (early_stop_syndrome) {
-      // Get hard bits
+      // Get hard bits.
       bool hard_bits_success = get_hard_bits(output);
 
-      // Early stop condition: check syndrome
+      // Early stop condition: check syndrome.
       if (hard_bits_success && check_syndrome()) {
         return i_iteration + 1;
       }
     }
   }
 
-  // Skip any further decisions if an early stop condition is configured
+  // Skip any further decisions if an early stop condition is configured.
   if ((crc != nullptr) || early_stop_syndrome) {
     return std::nullopt;
   }
 
-  // Get current hard bits
+  // Get current hard bits.
   bool hard_bits_success = get_hard_bits(output);
 
-  // Check syndrome for determining if the codeblock decoding is successful
+  // Check syndrome for determining if the codeblock decoding is successful.
   if (!hard_bits_success || !check_syndrome()) {
     return std::nullopt;
   }
@@ -276,104 +148,184 @@ printf("\n-------------------------------\n");*/
 
 void ldpc_decoder_impl::load_soft_bits(span<const log_likelihood_ratio> llrs, unsigned nof_llr)
 {
-  if (soft_bits.size() == 0) {
-      soft_bits.resize(ldpc::MAX_BG_N_FULL * ldpc::MAX_LIFTING_SIZE);
-  }
-
-  std::fill(soft_bits.begin(), soft_bits.end(), log_likelihood_ratio{0});
-
+  // Compute the number of data nodes fully occupied by the llrs (the + 2 is due to the shortened nodes at the beginning
+  // of the codeblock).
   unsigned nof_full_nodes = llrs.size() / lifting_size + 2;
+
+  // Copy input llrs and organize them by nodes.
   span<const log_likelihood_ratio> llr_view = llrs;
-  
-  span<log_likelihood_ratio> soft_bits_view(soft_bits.data(), soft_bits.size());
-
-  // First 2 nodes always 0 (shortened)
-  if (soft_bits_view.size() >= 2 * node_size_byte) {
-      ocuduvec::zero(soft_bits_view.first(2 * node_size_byte));
-      soft_bits_view = soft_bits_view.last(soft_bits_view.size() - 2 * node_size_byte);
-  }
-
-  for (unsigned i_node = 2, max_node = nof_full_nodes; i_node < max_node; ++i_node) {
-    
-    if (soft_bits_view.size() < node_size_byte) break; // Safety break
-
+  // Recall that the first 2 * lifting_size bits (2 nodes) are not transmitted.
+  span<log_likelihood_ratio> soft_bits_view(soft_bits);
+  ocuduvec::zero(soft_bits_view.first(2 * node_size_byte));
+  soft_bits_view = soft_bits_view.last(soft_bits_view.size() - 2 * node_size_byte);
+  for (unsigned i_node = 2 * node_size_byte, max_node = nof_full_nodes * node_size_byte; i_node != max_node;
+       i_node += node_size_byte) {
+    // Copy input LLR in the soft bits.
     if (nof_llr != 0) {
-      clamp(soft_bits_view.first(lifting_size), llr_view.first(std::min((size_t)lifting_size, llr_view.size())), soft_bits_clamp_low, soft_bits_clamp_high);
+      clamp(
+          soft_bits_view.first(lifting_size), llr_view.first(lifting_size), soft_bits_clamp_low, soft_bits_clamp_high);
     } else {
       ocuduvec::zero(soft_bits_view.first(lifting_size));
     }
 
-    if (llr_view.size() >= lifting_size) {
-        llr_view = llr_view.last(llr_view.size() - lifting_size);
-    }
-    nof_llr = (nof_llr >= lifting_size) ? (nof_llr - lifting_size) : 0;
+    // Advance input LLR.
+    llr_view = llr_view.last(llr_view.size() - lifting_size);
+    nof_llr  = (nof_llr >= lifting_size) ? (nof_llr - lifting_size) : 0;
 
-    // Zero tail of node
-    if (node_size_byte > lifting_size) {
-        ocuduvec::zero(soft_bits_view.subspan(lifting_size, node_size_byte - lifting_size));
-    }
+    // Zero node tail soft bits.
+    ocuduvec::zero(soft_bits_view.subspan(lifting_size, node_size_byte - lifting_size));
 
+    // Recall that soft bits may have zero padding in SIMD implementations (i.e., when node_size_byte != lifting_size).
     soft_bits_view = soft_bits_view.last(soft_bits_view.size() - node_size_byte);
   }
 
-  // Last few bits
+  // The length of llrs may not be an exact multiple of the lifting size.
   unsigned tail_positions = llr_view.size();
-  if (tail_positions != 0 && soft_bits_view.size() >= tail_positions) {
+  if (tail_positions != 0) {
+    // Copy last LLRs.
     ocuduvec::copy(soft_bits_view.first(tail_positions), llr_view);
-    if (node_size_byte > tail_positions) {
-        ocuduvec::zero(soft_bits_view.subspan(tail_positions, node_size_byte - tail_positions));
-    }
+    // Zero the remaining soft bits.
+    ocuduvec::zero(soft_bits_view.subspan(tail_positions, node_size_byte - lifting_size));
   }
-  
-  //printf("DEBUG: load_soft_bits finished successfully\n");
 }
 
-// edatsika replace with kernel, this is after extern c
-/*void ldpc_decoder_impl::update_variable_to_check_messages(unsigned i_layer) 
+void ldpc_decoder_impl::update_variable_to_check_messages(unsigned check_node)
 {
-    ldpc_v2c_subtraction(d_soft_bits, 
-                           d_c2v, 
-                           d_v2c, 
-                           d_v2c_copy, 
-                           d_adj_matrix, 
-                           d_row_offsets, 
-                           d_row_lengths, 
-                           lifting_size, 
-                           i_layer, 
-                           is_check_to_var_initialized[i_layer]);
-}*/
+  // Retrieve list of variable nodes connected to this check node.
+  const BG_adjacency_row_t& current_var_indices = current_graph->get_adjacency_row(check_node);
 
-// edatsika  this is after extern c
-/*void ldpc_decoder_impl::update_soft_bits(unsigned i_layer) 
-{
-    ldpc_soft_bits_update(d_soft_bits, 
-                            d_v2c_copy, 
-                            d_c2v, 
-                            d_adj_matrix, 
-                            d_shifts, 
-                            d_row_offsets, 
-                            d_row_lengths, 
-                            lifting_size, 
-                            i_layer);
+  // Find first NO_EDGE in current_var_indices.
+  const auto* this_var_index_end =
+      std::find_if(current_var_indices.cbegin(), current_var_indices.cend(), [this](auto& element) {
+        return (element == NO_EDGE) || (element >= bg_N_high_rate);
+      });
+
+  // Iterate all variable nodes connected to this check node.
+  for (BG_adjacency_row_t::const_iterator this_var_index = current_var_indices.cbegin();
+       this_var_index != this_var_index_end;
+       ++this_var_index) {
+    unsigned                         i_node   = *this_var_index;
+    span<const log_likelihood_ratio> soft     = get_soft_bits(i_node);
+    span<const log_likelihood_ratio> c2v      = get_check_to_var(check_node, i_node);
+    span<log_likelihood_ratio>       v2c      = get_var_to_check(i_node, 0);
+    span<log_likelihood_ratio>       v2c_copy = get_var_to_check(i_node, lifting_size);
+    if (is_check_to_var_initialized[check_node]) {
+      compute_var_to_check_msgs(v2c, soft, c2v);
+    } else {
+      ocuduvec::copy(v2c, soft);
+    }
+    ocuduvec::copy(v2c_copy, v2c);
+  }
+
+  // Next, update the messages corresponding to the extension region, if applicable.
+  // From layer 4 onwards, each layer is connected to only one consecutive block of lifting_size bits.
+  if (check_node >= 4) {
+    unsigned                         i_node   = bg_N_high_rate + check_node - 4;
+    span<const log_likelihood_ratio> soft     = get_soft_bits(i_node);
+    span<const log_likelihood_ratio> c2v      = get_check_to_var(check_node, bg_N_high_rate);
+    span<log_likelihood_ratio>       v2c      = get_var_to_check(bg_N_high_rate, 0);
+    span<log_likelihood_ratio>       v2c_copy = get_var_to_check(bg_N_high_rate, lifting_size);
+    if (is_check_to_var_initialized[check_node]) {
+      compute_var_to_check_msgs(v2c, soft, c2v);
+    } else {
+      ocuduvec::copy(v2c, soft);
+    }
+    ocuduvec::copy(v2c_copy, v2c);
+  }
 }
 
-
-// edatsika this is after extern c
-void ldpc_decoder_impl::update_check_to_variable_messages(unsigned i_layer) 
+void ldpc_decoder_impl::update_soft_bits(unsigned check_node)
 {
-    ldpc_c2v_min_sum(d_v2c, 
-                     d_c2v, 
-                     d_adj_matrix, 
-                     d_shifts, 
-                     d_row_offsets, 
-                     d_row_lengths, 
-                     lifting_size, 
-                     i_layer,
-                     total_edges); // new
-    
-    is_check_to_var_initialized[i_layer] = true;
-}*/
+  const BG_adjacency_row_t& current_var_indices = current_graph->get_adjacency_row(check_node);
+  for (BG_adjacency_row_t::const_iterator this_var_index = current_var_indices.cbegin(),
+                                          last_var_index = current_var_indices.cend();
+       (this_var_index != last_var_index) && (*this_var_index != NO_EDGE);
+       ++this_var_index) {
+    unsigned                         i_node            = std::min(*this_var_index, bg_N_high_rate);
+    span<const log_likelihood_ratio> this_check_to_var = get_check_to_var(check_node, i_node);
+    span<const log_likelihood_ratio> this_var_to_check = get_var_to_check(i_node, 0);
+    span<log_likelihood_ratio>       this_soft_bits    = get_soft_bits(*this_var_index);
+    compute_soft_bits(this_soft_bits, this_var_to_check, this_check_to_var);
+  }
+}
 
+void ldpc_decoder_impl::update_check_to_variable_messages(unsigned check_node)
+{
+  // Buffer to store the minimum (in absolute value) variable-to-check message.
+  std::array<log_likelihood_ratio, MAX_LIFTING_SIZE> min_var_to_check;
+  // Buffer to store the second minimum (in absolute value) variable-to-check message for each base graph check node.
+  std::array<log_likelihood_ratio, MAX_LIFTING_SIZE> second_min_var_to_check;
+  // Buffer to store the index of the minimum-valued variable-to-check message.
+  std::array<uint8_t, MAX_LIFTING_SIZE> min_var_to_check_index;
+  // Buffer to store the sign product of all variable-to-check messages.
+  std::array<uint8_t, MAX_LIFTING_SIZE> sign_prod_var_to_check;
+
+  // Take views of the above buffers.
+  span<log_likelihood_ratio> min_var_to_check_view = span<log_likelihood_ratio>(min_var_to_check).first(node_size_byte);
+  span<log_likelihood_ratio> second_min_var_to_check_view =
+      span<log_likelihood_ratio>(second_min_var_to_check).first(node_size_byte);
+  span<uint8_t> min_var_to_check_index_view = span<uint8_t>(min_var_to_check_index).first(node_size_byte);
+  span<uint8_t> sign_prod_var_to_check_view = span<uint8_t>(sign_prod_var_to_check).first(node_size_byte);
+
+  // Reset temporal buffers.
+  ocuduvec::fill(min_var_to_check_view, LLR_MAX);
+  ocuduvec::fill(second_min_var_to_check_view, LLR_MAX);
+  ocuduvec::zero(min_var_to_check_index_view);
+  // For the optimized implementations, we store 0 if the sign is positive and 1 if the sign is negative. Therefore, the
+  // following is equivalent to setting al signs to +1.
+  ocuduvec::zero(sign_prod_var_to_check_view);
+
+  // Retrieve list of variable nodes connected to this check node.
+  const BG_adjacency_row_t& current_var_indices = current_graph->get_adjacency_row(check_node);
+
+  // Find first NO_EDGE in current_var_indices.
+  const auto* this_var_index_end = std::find(current_var_indices.begin(), current_var_indices.end(), NO_EDGE);
+
+  // For all variable nodes connected to this check node.
+  unsigned var_node = 0;
+  for (const auto* this_var_index_itr = current_var_indices.cbegin(); this_var_index_itr != this_var_index_end;
+       ++this_var_index_itr, ++var_node) {
+    // Rotate the variable node as specified by the base graph.
+    unsigned shift          = current_graph->get_lifted_node(check_node, *this_var_index_itr);
+    unsigned v2c_base_index = std::min(*this_var_index_itr, bg_N_high_rate);
+
+    span<const log_likelihood_ratio> rotated_node = get_var_to_check(v2c_base_index, shift);
+
+    analyze_var_to_check_msgs(min_var_to_check_view,
+                              second_min_var_to_check_view,
+                              min_var_to_check_index_view,
+                              sign_prod_var_to_check_view,
+                              rotated_node,
+                              var_node);
+  }
+
+  // Scale the message to compensate for approximations.
+  scale(min_var_to_check_view, min_var_to_check_view);
+  scale(second_min_var_to_check_view, second_min_var_to_check_view);
+
+  // For all variable nodes connected to this check node.
+  var_node = 0;
+  for (const auto* this_var_index_itr = current_var_indices.cbegin(); this_var_index_itr != this_var_index_end;
+       ++this_var_index_itr, ++var_node) {
+    unsigned shift          = current_graph->get_lifted_node(check_node, *this_var_index_itr);
+    unsigned c2v_base_index = std::min(*this_var_index_itr, bg_N_high_rate);
+
+    span<log_likelihood_ratio>       this_check_to_var = get_check_to_var(check_node, c2v_base_index);
+    span<const log_likelihood_ratio> this_var_to_check = get_var_to_check(c2v_base_index, 0);
+    span<const log_likelihood_ratio> rotated_node      = get_var_to_check(c2v_base_index, shift);
+
+    compute_check_to_var_msgs(this_check_to_var,
+                              this_var_to_check,
+                              rotated_node,
+                              min_var_to_check_view,
+                              second_min_var_to_check_view,
+                              min_var_to_check_index_view,
+                              sign_prod_var_to_check_view,
+                              shift,
+                              var_node);
+  }
+  is_check_to_var_initialized[check_node] = true;
+}
 
 bool ldpc_decoder_impl::get_hard_bits(bit_buffer& out) const
 {
@@ -382,14 +334,14 @@ bool ldpc_decoder_impl::get_hard_bits(bit_buffer& out) const
     return hard_decision(out, llrs);
   }
 
-  // Perform hard-decision of the LLRs from the soft_bits array directly into the output without any padding
+  // Perform hard-decision of the LLRs from the soft_bits array directly into the output without any padding.
   bool valid = true;
   for (unsigned i_node = 0; i_node != bg_K; ++i_node) {
-    // View over the LLR
+    // View over the LLR.
     span<const log_likelihood_ratio> current_soft =
         span<const log_likelihood_ratio>(soft_bits).subspan(node_size_byte * i_node, lifting_size);
 
-    // Perform hard decision of the node
+    // Perform hard decision of the node.
     valid &= hard_decision(out, current_soft, lifting_size * i_node);
   }
 
@@ -398,22 +350,24 @@ bool ldpc_decoder_impl::get_hard_bits(bit_buffer& out) const
 
 bool ldpc_decoder_impl::check_syndrome() const
 {
-  // Temporary buffers
+  // Temporary buffers.
   static_vector<log_likelihood_ratio, ldpc::MAX_LIFTING_SIZE> soft_shifted_bits(lifting_size);
   static_bit_buffer<ldpc::MAX_LIFTING_SIZE>                   hard_shifted_bits(lifting_size);
   static_bit_buffer<ldpc::MAX_LIFTING_SIZE>                   hard_syndrome_bits(lifting_size);
 
-  // Make sure the last byte is zero for the static bit buffers
+  // Make sure the last byte is zero for the static bit buffers.
   hard_shifted_bits.get_buffer().back()  = 0;
   hard_syndrome_bits.get_buffer().back() = 0;
 
-  // Calculate number of layers or check nodes
+  // Calculate number of layers or check nodes.
   unsigned nof_check_nodes = codeblock_length / lifting_size - bg_K;
 
+  // Iterate all check nodes.
   for (unsigned i_check_node = 0; i_check_node != nof_check_nodes; ++i_check_node) {
     // Obtain parity check node.
     const BG_adjacency_row_t& current_var_indices = current_graph->get_adjacency_row(i_check_node);
 
+    // Iterate over all check nodes.
     for (BG_adjacency_row_t::const_iterator this_var_index = current_var_indices.cbegin(),
                                             last_var_index = current_var_indices.cend();
          (this_var_index != last_var_index) && (*this_var_index != NO_EDGE);
@@ -421,14 +375,14 @@ bool ldpc_decoder_impl::check_syndrome() const
       // Get shift.
       unsigned shift = current_graph->get_lifted_node(i_check_node, *this_var_index);
 
-      // Select view of the soft bits
+      // Select view of the soft bits.
       span<const log_likelihood_ratio> this_soft_bits =
           span<const log_likelihood_ratio>(soft_bits).subspan((*this_var_index) * node_size_byte, lifting_size);
 
-      // Circular shift of bits
+      // Circular shift of bits.
       ocuduvec::circ_shift_backward(soft_shifted_bits, this_soft_bits, shift);
 
-      // Perform hard decision in-place for the first node, early return if there is any undetermined soft bit
+      // Perform hard decision in-place for the first node. Early return if there is any undetermined soft bit.
       if (this_var_index == current_var_indices.cbegin()) {
         if (!hard_decision(hard_syndrome_bits, soft_shifted_bits)) {
           return false;
@@ -436,17 +390,17 @@ bool ldpc_decoder_impl::check_syndrome() const
         continue;
       }
 
-      // Hard decision on shifted soft bits, early return if there is any undetermined soft bit
+      // Hard decision on shifted soft bits. Early return if there is any undetermined soft bit.
       if (!hard_decision(hard_shifted_bits, soft_shifted_bits)) {
         return false;
       }
 
-      // XOR this node hard-bits with the current syndrome
+      // XOR this node hard-bits with the current syndrome.
       ocuduvec::binary_xor(
           hard_syndrome_bits.get_buffer(), hard_shifted_bits.get_buffer(), hard_syndrome_bits.get_buffer());
     }
 
-    // Check that all syndrome bits are zero. Early return false otherwise
+    // Check that all syndrome bits are zero. Early return false otherwise.
     span<const uint8_t> hard_syndrome_bytes = hard_syndrome_bits.get_buffer();
     if (std::any_of(hard_syndrome_bytes.begin(), hard_syndrome_bytes.end(), [](uint8_t byte) { return byte != 0; })) {
       return false;
@@ -456,25 +410,7 @@ bool ldpc_decoder_impl::check_syndrome() const
   return true;
 }
 
-// edatsika Free VRAM after decoding
-ldpc_decoder_impl::~ldpc_decoder_impl()
+ldpc_decoder_impl::~ldpc_decoder_impl() 
 {
-  // Free buffers
-  if (d_soft_bits) CHECK_HIP(hipFree(d_soft_bits));
-  if (d_c2v)       CHECK_HIP(hipFree(d_c2v));
-  if (d_v2c)       CHECK_HIP(hipFree(d_v2c));
-  if (d_v2c_copy)  CHECK_HIP(hipFree(d_v2c_copy)); // keeps state of messages from VNs to CNs when updating soft bits
-
-  // Free H matrix
-  if (d_adj_matrix)  CHECK_HIP(hipFree(d_adj_matrix));
-  if (d_row_offsets) CHECK_HIP(hipFree(d_row_offsets));
-  if (d_row_lengths) CHECK_HIP(hipFree(d_row_lengths));
-  
-  // Free pointers
-  d_soft_bits = nullptr;
-  d_c2v = nullptr;
-  d_v2c = nullptr;
-  d_adj_matrix = nullptr;
-  d_row_offsets = nullptr;
-  d_row_lengths = nullptr;
+  // Base class: no cleanup needed
 }
